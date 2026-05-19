@@ -368,14 +368,26 @@
     },
     {
       "package": "scan",
-      "function": "ScanRepository",
+      "function": "validatePolicyFile",
       "file": "cmd/ampel-provider/scan/scan.go",
       "line": 243,
-      "complexity": 11,
-      "line_coverage": 89.74358974358974,
-      "crap": 11.13054839090342,
+      "complexity": 2,
+      "line_coverage": 100,
+      "crap": 2,
       "contract_coverage": 100,
-      "gaze_crap": 11,
+      "gaze_crap": 2,
+      "quadrant": "Q1_Safe"
+    },
+    {
+      "package": "scan",
+      "function": "ScanRepository",
+      "file": "cmd/ampel-provider/scan/scan.go",
+      "line": 252,
+      "complexity": 12,
+      "line_coverage": 92.6829268292683,
+      "crap": 12.056412414213375,
+      "contract_coverage": 100,
+      "gaze_crap": 12,
       "quadrant": "Q1_Safe"
     },
     {
