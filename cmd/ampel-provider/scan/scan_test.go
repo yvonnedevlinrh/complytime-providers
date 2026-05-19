@@ -254,6 +254,20 @@ func writeTempPolicy(t *testing.T, dir string) string {
 	return path
 }
 
+func TestValidatePolicyFile(t *testing.T) {
+	t.Run("existing file", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		path := writeTempPolicy(t, tmpDir)
+		require.NoError(t, validatePolicyFile(path))
+	})
+	t.Run("missing file", func(t *testing.T) {
+		err := validatePolicyFile(filepath.Join(t.TempDir(), "nonexistent.json"))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "policy file not found")
+		require.Contains(t, err.Error(), "was Generate called?")
+	})
+}
+
 func TestScanRepository_MockSuccess(t *testing.T) {
 	tmpDir := t.TempDir()
 	attestation := makeTestAttestation("abc123def456")
@@ -536,4 +550,5 @@ func TestScanRepository_AmpelExitError_NoResultFile(t *testing.T) {
 	_, err := ScanRepository(repo, "main", specPath, cfg, runner)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "reading ampel results")
+	require.Contains(t, err.Error(), "ampel output:")
 }

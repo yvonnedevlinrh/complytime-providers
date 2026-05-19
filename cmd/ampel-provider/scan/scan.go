@@ -238,6 +238,15 @@ func extractHashFromStatement(data []byte) (string, error) {
 	return hash, nil
 }
 
+// validatePolicyFile checks that the policy file exists before running ampel verify.
+// Returns a clear error message guiding the user to run Generate first.
+func validatePolicyFile(path string) error {
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("policy file not found at %s (was Generate called?): %w", path, err)
+	}
+	return nil
+}
+
 // ScanRepository runs snappy and ampel verify for a single repository, branch,
 // and spec file. The specPath must already be resolved (see ResolveSpecPath).
 func ScanRepository(repo RepoTarget, branch, specPath string, cfg ScanConfig, runner CommandRunner) (*RawScanResult, error) {
@@ -284,8 +293,8 @@ func ScanRepository(repo RepoTarget, branch, specPath string, cfg ScanConfig, ru
 		return nil, fmt.Errorf("extracting subject hash for %s branch %s: %w", repo.URL, branch, err)
 	}
 
-	if _, err := os.Stat(cfg.PolicyPath); err != nil {
-		return nil, fmt.Errorf("policy file not found at %s (was Generate called?): %w", cfg.PolicyPath, err)
+	if err := validatePolicyFile(cfg.PolicyPath); err != nil {
+		return nil, err
 	}
 
 	// Run ampel verify with the subject hash, policy, and attestation.
@@ -301,7 +310,7 @@ func ScanRepository(repo RepoTarget, branch, specPath string, cfg ScanConfig, ru
 	if err != nil {
 		var exitErr *exec.ExitError
 		if !errors.As(err, &exitErr) {
-			return nil, fmt.Errorf("ampel verify failed for %s branch %s: %w (output: %s)", repo.URL, branch, err, string(ampelCmdOutput))
+			return nil, fmt.Errorf("ampel verify failed for %s branch %s: %w (ampel output: %s)", repo.URL, branch, err, string(ampelCmdOutput))
 		}
 		logger.Info("ampel verify returned non-zero exit", "repo", repo.URL, "branch", branch, "exit_code", exitErr.ExitCode())
 	}
