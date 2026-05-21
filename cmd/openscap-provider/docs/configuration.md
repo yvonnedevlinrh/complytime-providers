@@ -68,7 +68,7 @@ Common Fedora profiles:
 
 ```yaml
 policies:
-  - url: quay.io/complytime/complytime-policies@cis-fedora-l1-workstation
+  - url: quay.io/complytime/policies-cis-fedora-l1-workstation:latest
     id: cis-fedora-l1
 
 targets:
@@ -88,7 +88,7 @@ complyctl scan my-workstation
 
 ```yaml
 policies:
-  - url: quay.io/complytime/complytime-policies@cis-fedora-l1-server
+  - url: quay.io/complytime/policies-cis-fedora-l1-server:latest
     id: cis-fedora-l1-server
 
 targets:
