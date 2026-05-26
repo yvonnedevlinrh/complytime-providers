@@ -2,6 +2,9 @@
 
 End-to-end testing of the Gemara-native workflow with the OpenSCAP plugin.
 
+See [`docs/configuration.md`](docs/configuration.md) for the
+`complytime.yaml` variable reference and usage examples.
+
 ## Prerequisites
 
 | Requirement | Purpose |
