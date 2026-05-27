@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# Gitleaks configuration for complytime-providers.
+# Extends the default ruleset with allowlists for test fixtures
+# that contain intentional fake credentials.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Allow intentional fake tokens in test fixtures"
+paths = [
+  '''_test\.go$''',
+]
