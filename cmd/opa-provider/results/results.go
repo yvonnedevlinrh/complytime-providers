@@ -166,11 +166,8 @@ func WritePerTargetResult(result *PerTargetResult, dir string) error {
 
 // ToScanResponse maps a slice of PerTargetResults to a provider.ScanResponse.
 // Findings are grouped by requirement ID into AssessmentLog entries. Each
-// target/branch scan becomes a Step within the assessment.
-//
-// TODO: Once complyctl#510 merges, operational errors (failed clones, bundle
-// pull failures, write errors) should be placed into resp.Errors instead of
-// synthetic "scan-error" assessment entries.
+// target/branch scan becomes a Step within the assessment. Operational errors
+// (targets with Status "error" and no findings) are placed into resp.Errors.
 func ToScanResponse(targetResults []*PerTargetResult) *provider.ScanResponse {
 	type reqGroup struct {
 		requirementID string
@@ -181,6 +178,7 @@ func ToScanResponse(targetResults []*PerTargetResult) *provider.ScanResponse {
 
 	groups := make(map[string]*reqGroup)
 	var order []string
+	var opErrors []string
 
 	for _, tr := range targetResults {
 		stepName := tr.Target
@@ -208,19 +206,7 @@ func ToScanResponse(targetResults []*PerTargetResult) *provider.ScanResponse {
 		}
 
 		if tr.Status == "error" && len(tr.Findings) == 0 {
-			const errorReqID = "scan-error"
-			g, ok := groups[errorReqID]
-			if !ok {
-				g = &reqGroup{requirementID: errorReqID}
-				groups[errorReqID] = g
-				order = append(order, errorReqID)
-			}
-			g.steps = append(g.steps, provider.Step{
-				Name:    stepName,
-				Result:  provider.ResultError,
-				Message: tr.Error,
-			})
-			g.totalCount++
+			opErrors = append(opErrors, fmt.Sprintf("%s: %s", stepName, tr.Error))
 		}
 	}
 
@@ -247,13 +233,12 @@ func ToScanResponse(targetResults []*PerTargetResult) *provider.ScanResponse {
 		})
 	}
 
-	return &provider.ScanResponse{Assessments: assessments}
+	return &provider.ScanResponse{Assessments: assessments, Errors: opErrors}
 }
 
 // ScanStatusAssessment returns a synthetic AssessmentLog reporting overall
-// scan health across all targets. If writeErr is non-nil, a result-persistence
-// step is appended to signal that writing scan results to disk failed.
-func ScanStatusAssessment(targetResults []*PerTargetResult, writeErr error) provider.AssessmentLog {
+// scan health across all targets.
+func ScanStatusAssessment(targetResults []*PerTargetResult) provider.AssessmentLog {
 	successCount := 0
 	var steps []provider.Step
 
@@ -279,22 +264,9 @@ func ScanStatusAssessment(targetResults []*PerTargetResult, writeErr error) prov
 		}
 	}
 
-	if writeErr != nil {
-		steps = append(steps, provider.Step{
-			Name:    "result-persistence",
-			Result:  provider.ResultError,
-			Message: writeErr.Error(),
-		})
-	}
-
 	total := len(targetResults)
 	var message string
-	if writeErr != nil {
-		message = fmt.Sprintf(
-			"%d of %d targets scanned successfully; result persistence errors occurred",
-			successCount, total,
-		)
-	} else if successCount == total {
+	if successCount == total {
 		message = fmt.Sprintf("all %d targets scanned successfully", total)
 	} else {
 		message = fmt.Sprintf("%d of %d targets scanned successfully", successCount, total)
