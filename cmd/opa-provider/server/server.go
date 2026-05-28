@@ -124,13 +124,16 @@ func (s *ProviderServer) Scan(
 	}
 
 	resp := results.ToScanResponse(allResults)
-	aggregatedErr := errors.Join(writeErrs...)
-	scanStatus := results.ScanStatusAssessment(allResults, aggregatedErr)
+	scanStatus := results.ScanStatusAssessment(allResults)
 	resp.Assessments = append(
 		[]provider.AssessmentLog{scanStatus}, resp.Assessments...,
 	)
 
-	return resp, aggregatedErr
+	if aggregatedErr := errors.Join(writeErrs...); aggregatedErr != nil {
+		resp.Errors = append(resp.Errors, aggregatedErr.Error())
+	}
+
+	return resp, nil
 }
 
 func (s *ProviderServer) processTarget(

@@ -32,7 +32,7 @@ github.com/cespare/xxhash/v2
 ## explicit; go 1.25.8
 github.com/complytime/complybeacon/proofwatch
 github.com/complytime/complybeacon/proofwatch/internal/metrics
-# github.com/complytime/complyctl v1.0.0-alpha.0.0.20260423124442-eafccc5f4f2b
+# github.com/complytime/complyctl v1.0.0-alpha.0.0.20260526092431-fe09f83bd16f
 ## explicit; go 1.25.0
 github.com/complytime/complyctl/api/plugin
 github.com/complytime/complyctl/internal/complytime
@@ -96,7 +96,7 @@ github.com/grpc-ecosystem/grpc-gateway/v2/utilities
 # github.com/hashicorp/go-hclog v1.6.3
 ## explicit; go 1.13
 github.com/hashicorp/go-hclog
-# github.com/hashicorp/go-plugin v1.7.0
+# github.com/hashicorp/go-plugin v1.8.0
 ## explicit; go 1.24
 github.com/hashicorp/go-plugin
 github.com/hashicorp/go-plugin/internal/cmdrunner

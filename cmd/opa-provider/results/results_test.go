@@ -4,7 +4,6 @@ package results
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -220,6 +219,7 @@ func TestToScanResponse_Aggregation(t *testing.T) {
 	require.Len(t, resp.Assessments, 1)
 	assert.Equal(t, "docker.network_encryption", resp.Assessments[0].RequirementID)
 	assert.Len(t, resp.Assessments[0].Steps, 2)
+	assert.Empty(t, resp.Errors)
 }
 
 func TestToScanResponse_ErrorTargets(t *testing.T) {
@@ -233,10 +233,33 @@ func TestToScanResponse_ErrorTargets(t *testing.T) {
 	}
 
 	resp := ToScanResponse(results)
+	assert.Empty(t, resp.Assessments, "operational errors should not produce assessments")
+	require.Len(t, resp.Errors, 1)
+	assert.Contains(t, resp.Errors[0], "clone failed")
+	assert.Contains(t, resp.Errors[0], "org/repo@main")
+}
+
+func TestToScanResponse_ErrorTargetWithFindings(t *testing.T) {
+	results := []*PerTargetResult{
+		{
+			Target: "org/repo",
+			Branch: "main",
+			Status: "error",
+			Error:  "partial failure",
+			Findings: []Finding{
+				{RequirementID: "docker.network_encryption", Result: "fail", Reason: "violation"},
+			},
+		},
+	}
+
+	resp := ToScanResponse(results)
 	require.Len(t, resp.Assessments, 1)
-	assert.Equal(t, "scan-error", resp.Assessments[0].RequirementID)
+	assert.Equal(t, "docker.network_encryption", resp.Assessments[0].RequirementID)
 	require.Len(t, resp.Assessments[0].Steps, 1)
-	assert.Equal(t, provider.ResultError, resp.Assessments[0].Steps[0].Result)
+	assert.Equal(t, provider.ResultError, resp.Assessments[0].Steps[0].Result,
+		"findings on error targets should map to ResultError via mapResult")
+	assert.Empty(t, resp.Errors,
+		"error targets with findings should not duplicate into resp.Errors")
 }
 
 func TestToScanResponse_DeterministicOrder(t *testing.T) {
@@ -258,11 +281,13 @@ func TestToScanResponse_DeterministicOrder(t *testing.T) {
 	for i := range resp1.Assessments {
 		assert.Equal(t, resp1.Assessments[i].RequirementID, resp2.Assessments[i].RequirementID)
 	}
+	assert.Empty(t, resp1.Errors)
 }
 
 func TestToScanResponse_Empty(t *testing.T) {
 	resp := ToScanResponse(nil)
 	assert.Empty(t, resp.Assessments)
+	assert.Empty(t, resp.Errors)
 }
 
 func TestScanStatusAssessment_AllPassed(t *testing.T) {
@@ -270,7 +295,7 @@ func TestScanStatusAssessment_AllPassed(t *testing.T) {
 		{Target: "org/repo", Branch: "main", Status: "scanned"},
 		{Target: "org/repo2", Branch: "main", Status: "scanned"},
 	}
-	assessment := ScanStatusAssessment(results, nil)
+	assessment := ScanStatusAssessment(results)
 	assert.Equal(t, "scan-status", assessment.RequirementID)
 	assert.Len(t, assessment.Steps, 2)
 	for _, step := range assessment.Steps {
@@ -284,7 +309,7 @@ func TestScanStatusAssessment_PartialFailure(t *testing.T) {
 		{Target: "org/repo", Branch: "main", Status: "scanned"},
 		{Target: "org/repo2", Branch: "main", Status: "error", Error: "clone failed"},
 	}
-	assessment := ScanStatusAssessment(results, nil)
+	assessment := ScanStatusAssessment(results)
 	assert.Equal(t, "scan-status", assessment.RequirementID)
 	assert.Len(t, assessment.Steps, 2)
 
@@ -307,58 +332,30 @@ func TestScanStatusAssessment_AllErrors(t *testing.T) {
 		{Target: "org/repo", Branch: "main", Status: "error", Error: "fail1"},
 		{Target: "org/repo2", Branch: "main", Status: "error", Error: "fail2"},
 	}
-	assessment := ScanStatusAssessment(results, nil)
+	assessment := ScanStatusAssessment(results)
 	for _, step := range assessment.Steps {
 		assert.Equal(t, provider.ResultFailed, step.Result)
 	}
 }
 
 func TestScanStatusAssessment_Empty(t *testing.T) {
-	assessment := ScanStatusAssessment(nil, nil)
+	assessment := ScanStatusAssessment(nil)
 	assert.Equal(t, "scan-status", assessment.RequirementID)
 	assert.Len(t, assessment.Steps, 0)
 	assert.Contains(t, assessment.Message, "all 0 targets scanned")
 }
 
-func TestScanStatusAssessment_WithWriteError(t *testing.T) {
-	results := []*PerTargetResult{
-		{Target: "org/repo", Branch: "main", Status: "scanned"},
-	}
-	writeErr := fmt.Errorf("disk full: write failed")
-	assessment := ScanStatusAssessment(results, writeErr)
-
-	assert.Equal(t, "scan-status", assessment.RequirementID)
-	require.NotEmpty(t, assessment.Steps)
-	lastStep := assessment.Steps[len(assessment.Steps)-1]
-	assert.Equal(t, "result-persistence", lastStep.Name)
-	assert.Equal(t, provider.ResultError, lastStep.Result)
-	assert.Contains(t, lastStep.Message, "disk full")
-	assert.Contains(t, assessment.Message, "result persistence errors occurred")
-}
-
-func TestScanStatusAssessment_NilWriteError(t *testing.T) {
+func TestScanStatusAssessment_OnlyTargetSteps(t *testing.T) {
 	results := []*PerTargetResult{
 		{Target: "org/repo", Branch: "main", Status: "scanned"},
 		{Target: "org/repo2", Branch: "main", Status: "scanned"},
 	}
-	assessment := ScanStatusAssessment(results, nil)
+	assessment := ScanStatusAssessment(results)
 
-	for _, step := range assessment.Steps {
-		assert.NotEqual(t, "result-persistence", step.Name)
-	}
+	require.Len(t, assessment.Steps, 2)
+	assert.Equal(t, "org/repo@main", assessment.Steps[0].Name)
+	assert.Equal(t, "org/repo2@main", assessment.Steps[1].Name)
 	assert.Contains(t, assessment.Message, "all 2 targets scanned successfully")
-}
-
-func TestScanStatusAssessment_WriteErrorWithAllTargetsScanned(t *testing.T) {
-	results := []*PerTargetResult{
-		{Target: "org/repo", Branch: "main", Status: "scanned"},
-		{Target: "org/repo2", Branch: "dev", Status: "scanned"},
-	}
-	writeErr := fmt.Errorf("write failed")
-	assessment := ScanStatusAssessment(results, writeErr)
-
-	assert.Contains(t, assessment.Message, "result persistence errors occurred")
-	assert.Contains(t, assessment.Message, "2 of 2 targets scanned successfully")
 }
 
 func TestWritePerTargetResult(t *testing.T) {

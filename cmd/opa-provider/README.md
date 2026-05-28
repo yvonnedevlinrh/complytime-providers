@@ -107,11 +107,11 @@ When the plugin receives the `scan` command from complyctl, it will:
    - Run `conftest test <path> --policy <dir> --output json --all-namespaces --no-fail`
    - Parse conftest JSON output into findings grouped by requirement ID
    - Write per-target result files as JSON to the results directory
-4. Return assessment results to complyctl with a `scan-status` summary prepended
+4. Return assessment results to complyctl with a `scan-status` summary prepended. Operational errors (failed clones, bundle-pull failures, write errors) are reported via `ScanResponse.Errors`.
 
 **Requirement ID derivation:** Requirement IDs are extracted from conftest query metadata. For example, the query `data.kubernetes.run_as_root.deny` produces the requirement ID `kubernetes.run_as_root` (the `data.` prefix and rule type suffix are stripped).
 
-**Error handling:** Per-target errors (clone failures, policy evaluation errors) are captured in the results and the scan continues with remaining targets. Global errors (missing tools, no targets) return an error immediately.
+**Error handling:** Per-target errors (clone failures, policy evaluation errors) are reported via `ScanResponse.Errors` and the scan continues with remaining targets. Global errors (missing tools, no targets) return a gRPC-level error immediately.
 
 ### Workspace Layout
 

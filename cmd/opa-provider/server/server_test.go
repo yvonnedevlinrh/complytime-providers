@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -774,6 +775,43 @@ func TestScan_BundlePullFailure_PartialScan(t *testing.T) {
 	resp, err := srv.Scan(context.Background(), req)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
+}
+
+func TestScan_WriteError_PopulatesRespErrors(t *testing.T) {
+	runner := conftestRunner(conftestAllSuccessJSON)
+	ldr := &mockLoader{
+		loadFn: func(_ provider.Target, _ string) (string, error) {
+			return t.TempDir(), nil
+		},
+	}
+
+	// Create a valid workspace so EnsureDirectories succeeds, then
+	// make the results directory non-writable to trigger write errors
+	// from WritePerTargetResult.
+	wsDir := t.TempDir()
+	srv := New(ServerOptions{
+		Runner:       runner,
+		Loader:       ldr,
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: wsDir,
+	})
+
+	// Pre-create the results directory, then make it read-only so
+	// WritePerTargetResult's os.WriteFile fails.
+	resultsDir := filepath.Join(wsDir, "opa", "results")
+	require.NoError(t, os.MkdirAll(resultsDir, 0750))
+	require.NoError(t, os.Chmod(resultsDir, 0500))
+	t.Cleanup(func() { _ = os.Chmod(resultsDir, 0750) })
+
+	req := makeScanRequest(t, []provider.Target{
+		localTarget(t, t.TempDir(), "ghcr.io/org/bundle:dev"),
+	})
+	resp, err := srv.Scan(context.Background(), req)
+	require.NoError(t, err, "write errors should not cause gRPC-level failure")
+	require.NotNil(t, resp)
+	assert.NotEmpty(t, resp.Errors, "write errors should appear in resp.Errors")
+	assert.NotEmpty(t, resp.Assessments, "assessments should still be present")
+	assert.Equal(t, "scan-status", resp.Assessments[0].RequirementID)
 }
 
 // --- Scan status tests ---

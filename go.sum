@@ -18,8 +18,8 @@ github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UF
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
 github.com/complytime/complybeacon/proofwatch v0.0.0-20260424082805-85cfda04ee52 h1:f6228lCLqGb0ch9Rab9wVF+wF6utDRiOuQ7IjZCyQn4=
 github.com/complytime/complybeacon/proofwatch v0.0.0-20260424082805-85cfda04ee52/go.mod h1:VfDPrui0Gdr0swWuI7djqamVHJBF+nK7+kquKDNKZKo=
-github.com/complytime/complyctl v1.0.0-alpha.0.0.20260423124442-eafccc5f4f2b h1:NYWtpO2cqkj0p8zN90i6ECUCBLUnjFrVJX/tF9Xpqw8=
-github.com/complytime/complyctl v1.0.0-alpha.0.0.20260423124442-eafccc5f4f2b/go.mod h1:RwPfq8S8B65OjQoq0arWOauC31h2pjwfnspkWI4trbg=
+github.com/complytime/complyctl v1.0.0-alpha.0.0.20260526092431-fe09f83bd16f h1:lmLv1rf1uTv4jSVm6eUgnNlFLUbFYlmXvrJ2EtQAqWQ=
+github.com/complytime/complyctl v1.0.0-alpha.0.0.20260526092431-fe09f83bd16f/go.mod h1:GmqwmIUbm3uXWR49h0x4G7vQkr36EtTGtRtRKcj/66Q=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=
@@ -56,8 +56,8 @@ github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 h1:5VipnvEpbqr2gA2VbM+nYVbkIF2
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0/go.mod h1:Hyl3n6Twe1hvtd9XUXDec4pTvgMSEixRuQKPTMH2bNs=
 github.com/hashicorp/go-hclog v1.6.3 h1:Qr2kF+eVWjTiYmU7Y31tYlP1h0q/X3Nl3tPGdaB11/k=
 github.com/hashicorp/go-hclog v1.6.3/go.mod h1:W4Qnvbt70Wk/zYJryRzDRU/4r0kIg0PVHBcfoyhpF5M=
-github.com/hashicorp/go-plugin v1.7.0 h1:YghfQH/0QmPNc/AZMTFE3ac8fipZyZECHdDPshfk+mA=
-github.com/hashicorp/go-plugin v1.7.0/go.mod h1:BExt6KEaIYx804z8k4gRzRLEvxKVb+kn0NMcihqOqb8=
+github.com/hashicorp/go-plugin v1.8.0 h1:ie8S6RRY8RvB2usYZv+AAZ/wBvx2AU5p5QeP5j/FORs=
+github.com/hashicorp/go-plugin v1.8.0/go.mod h1:BExt6KEaIYx804z8k4gRzRLEvxKVb+kn0NMcihqOqb8=
 github.com/hashicorp/yamux v0.1.2 h1:XtB8kyFOyHXYVFnwT5C3+Bdo8gArse7j2AQ0DA0Uey8=
 github.com/hashicorp/yamux v0.1.2/go.mod h1:C+zze2n6e/7wshOZep2A70/aQU6QBRWJO/G6FT1wIns=
 github.com/jhump/protoreflect v1.17.0 h1:qOEr613fac2lOuTgWN4tPAtLL7fUSbuJL5X5XumQh94=

@@ -15,3 +15,7 @@ ENABLE_LINTERS:
   - REPOSITORY_KICS
   - YAML_YAMLLINT
 REPOSITORY_KICS_ARGUMENTS: "--fail-on high --exclude-paths vendor,node_modules"
+# Exclude vendored proto files from protolint
+PROTOBUF_PROTOLINT_FILTER_REGEX_EXCLUDE: "vendor/"
+# Use repo-level gitleaks config for allowlists
+REPOSITORY_GITLEAKS_CONFIG_FILE: .gitleaks.toml
