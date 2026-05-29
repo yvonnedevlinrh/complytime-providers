@@ -18,6 +18,8 @@ const (
 	ReposDir = "repos"
 	// ResultsDir is the subdirectory for per-target result files.
 	ResultsDir = "results"
+	// GeneratedDir is the subdirectory for generation artifacts (scan-config.json).
+	GeneratedDir = "generated"
 )
 
 // Config holds the provider configuration with workspace-relative paths.
@@ -50,6 +52,11 @@ func (c *Config) ResultsDirPath() string {
 	return filepath.Join(c.OpaDir(), ResultsDir)
 }
 
+// GeneratedDirPath returns the path for generation artifacts.
+func (c *Config) GeneratedDirPath() string {
+	return filepath.Join(c.OpaDir(), GeneratedDir)
+}
+
 // PolicyDirForBundle returns a bundle-specific policy directory path.
 func (c *Config) PolicyDirForBundle(bundleRef string) string {
 	sanitized := bundleRef
@@ -65,6 +72,7 @@ func (c *Config) EnsureDirectories() error {
 		c.PolicyDirPath(),
 		c.ReposDirPath(),
 		c.ResultsDirPath(),
+		c.GeneratedDirPath(),
 	}
 	for _, dir := range directories {
 		if err := os.MkdirAll(dir, 0750); err != nil {

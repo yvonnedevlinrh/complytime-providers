@@ -101,6 +101,48 @@ func TestConstructConftestPullCommand_WithOCIPrefix(t *testing.T) {
 	}
 }
 
+func TestConstructConftestTestCommandWithNamespaces(t *testing.T) {
+	name, args := constructConftestTestCommandWithNamespaces(
+		"/tmp/input", "/tmp/policy",
+		[]string{"kubernetes.run_as_root", "kubernetes.resource_limits"},
+	)
+	assert.Equal(t, "conftest", name)
+	assert.Contains(t, args, "test")
+	assert.Contains(t, args, "/tmp/input")
+	assert.Contains(t, args, "--policy")
+	assert.Contains(t, args, "/tmp/policy")
+	assert.Contains(t, args, "--output")
+	assert.Contains(t, args, "json")
+	assert.Contains(t, args, "--no-fail")
+	assert.NotContains(t, args, "--all-namespaces")
+
+	// Verify namespace flags appear in pairs.
+	nsCount := 0
+	for i, arg := range args {
+		if arg == "--namespace" {
+			nsCount++
+			require.Less(t, i+1, len(args), "namespace flag must have a value")
+		}
+	}
+	assert.Equal(t, 2, nsCount)
+}
+
+func TestEvalPolicyWithNamespaces_Success(t *testing.T) {
+	expectedJSON := []byte(
+		`[{"filename":"test.yaml","namespace":"kubernetes.run_as_root","successes":1}]`,
+	)
+	runner := &mockRunner{response: expectedJSON}
+	out, err := EvalPolicyWithNamespaces(
+		"/tmp/input", "/tmp/policy",
+		[]string{"kubernetes.run_as_root"}, runner,
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedJSON, out)
+	require.Len(t, runner.calls, 1)
+	assert.Contains(t, runner.calls[0].args, "--namespace")
+	assert.NotContains(t, runner.calls[0].args, "--all-namespaces")
+}
+
 func TestEvalPolicy_Failure(t *testing.T) {
 	runner := &mockRunner{
 		response: []byte("error"),
