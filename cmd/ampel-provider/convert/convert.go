@@ -39,55 +39,69 @@ func LoadGranularPolicies(dir string) (map[string]*AmpelPolicy, error) {
 		if err != nil {
 			return err
 		}
-		// Allow descent into directories; skip them for policy processing.
-		if d.IsDir() {
+		if skipEntry(d) {
 			return nil
 		}
-		// Skip symbolic links — do not follow them.
-		if d.Type()&fs.ModeSymlink != 0 {
-			return nil
-		}
-		if filepath.Ext(d.Name()) != ".json" {
-			return nil
-		}
-		if d.Name() == PolicyFileName {
-			return nil
-		}
-
-		relPath, relErr := filepath.Rel(dir, path)
-		if relErr != nil {
-			return fmt.Errorf("computing relative path for %q: %w", path, relErr)
-		}
-
-		data, readErr := readRootFile(root, relPath, path)
-		if readErr != nil {
-			return readErr
-		}
-
-		var p AmpelPolicy
-		if unmarshalErr := json.Unmarshal(data, &p); unmarshalErr != nil {
-			return fmt.Errorf("parsing policy file %q: %w", path, unmarshalErr)
-		}
-		if p.ID == "" {
-			return fmt.Errorf("policy file %q has empty id field", path)
-		}
-
-		if existingPath, exists := idPaths[p.ID]; exists {
-			return fmt.Errorf(
-				"duplicate policy id %q found in %q and %q",
-				p.ID, existingPath, path,
-			)
-		}
-		idPaths[p.ID] = path
-		policies[p.ID] = &p
-
-		return nil
+		return loadPolicy(root, dir, path, policies, idPaths)
 	})
-	if err := walkErr; err != nil {
-		return nil, err
+	if walkErr != nil {
+		return nil, walkErr
 	}
 
 	return policies, nil
+}
+
+// skipEntry returns true for directory entries, symbolic links,
+// non-JSON files, and the merged policy bundle output file.
+func skipEntry(d fs.DirEntry) bool {
+	if d.IsDir() {
+		return true
+	}
+	if d.Type()&fs.ModeSymlink != 0 {
+		return true
+	}
+	if filepath.Ext(d.Name()) != ".json" {
+		return true
+	}
+	return d.Name() == PolicyFileName
+}
+
+// loadPolicy reads a single policy JSON file through the root-scoped
+// handle, parses it, checks for duplicates, and adds it to the map.
+func loadPolicy(
+	root *os.Root,
+	dir, path string,
+	policies map[string]*AmpelPolicy,
+	idPaths map[string]string,
+) error {
+	relPath, relErr := filepath.Rel(dir, path)
+	if relErr != nil {
+		return fmt.Errorf("computing relative path for %q: %w", path, relErr)
+	}
+
+	data, readErr := readRootFile(root, relPath, path)
+	if readErr != nil {
+		return readErr
+	}
+
+	var p AmpelPolicy
+	if unmarshalErr := json.Unmarshal(data, &p); unmarshalErr != nil {
+		return fmt.Errorf("parsing policy file %q: %w", path, unmarshalErr)
+	}
+	if p.ID == "" {
+		return fmt.Errorf("policy file %q has empty id field", path)
+	}
+
+	if existingPath, exists := idPaths[p.ID]; exists {
+		return fmt.Errorf(
+			"duplicate policy id %q found in %q and %q",
+			p.ID, existingPath, path,
+		)
+	}
+	idPaths[p.ID] = path
+	policies[p.ID] = &p
+
+	return nil
 }
 
 // readRootFile reads a file using the root-scoped API to prevent
