@@ -142,7 +142,7 @@ func (s *ProviderServer) Generate(
 		return &provider.GenerateResponse{Success: true}, nil
 	}
 
-	namespaces, reverseMap, warnings := generate.MatchRequirements(
+	ids, reverseMap, warnings := generate.MatchRequirements(
 		req.Configuration, mapping,
 	)
 	for _, w := range warnings {
@@ -150,13 +150,13 @@ func (s *ProviderServer) Generate(
 	}
 
 	if err := generate.WriteScanConfig(
-		cfg.GeneratedDirPath(), namespaces, reverseMap, policyDir,
+		cfg.GeneratedDirPath(), ids, reverseMap, policyDir,
 	); err != nil {
 		return nil, fmt.Errorf("writing scan config: %w", err)
 	}
 
 	logger.Info("generate complete",
-		"matched_namespaces", len(namespaces),
+		"matched_ids", len(ids),
 		"warnings", len(warnings))
 
 	return &provider.GenerateResponse{Success: true}, nil
@@ -415,9 +415,9 @@ func (s *ProviderServer) evalAndParse(
 
 	var raw []byte
 	var err error
-	if scanCfg != nil && scanCfg.Namespaces != nil {
+	if scanCfg != nil && scanCfg.IDs != nil {
 		raw, err = scan.EvalPolicyWithNamespaces(
-			inputPath, policyDir, scanCfg.Namespaces, s.opts.Runner,
+			inputPath, policyDir, scanCfg.IDs, s.opts.Runner,
 		)
 	} else {
 		raw, err = scan.EvalPolicy(inputPath, policyDir, s.opts.Runner)

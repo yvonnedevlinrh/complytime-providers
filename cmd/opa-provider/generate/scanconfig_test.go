@@ -13,24 +13,24 @@ import (
 
 func TestWriteAndReadScanConfig_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	namespaces := []string{"kubernetes.run_as_root", "kubernetes.resource_limits"}
+	ids := []string{"kubernetes.run_as_root", "kubernetes.resource_limits"}
 	reverseMap := map[string]string{
 		"kubernetes.run_as_root":     "CIS-K8S-5.2.6",
 		"kubernetes.resource_limits": "CIS-K8S-5.4.1",
 	}
 
-	err := WriteScanConfig(dir, namespaces, reverseMap, "/path/to/bundle")
+	err := WriteScanConfig(dir, ids, reverseMap, "/path/to/bundle")
 	require.NoError(t, err)
 
 	cfg, err := ReadScanConfig(dir)
 	require.NoError(t, err)
-	assert.Equal(t, namespaces, cfg.Namespaces)
+	assert.Equal(t, ids, cfg.IDs)
 	assert.Equal(t, reverseMap, cfg.ReverseMapping)
 	assert.Equal(t, "/path/to/bundle", cfg.BundleDir)
 	assert.NotEmpty(t, cfg.GeneratedAt)
 }
 
-func TestWriteAndReadScanConfig_NullNamespaces(t *testing.T) {
+func TestWriteAndReadScanConfig_NullIDs(t *testing.T) {
 	dir := t.TempDir()
 
 	err := WriteScanConfig(dir, nil, nil, "/path/to/bundle")
@@ -38,7 +38,7 @@ func TestWriteAndReadScanConfig_NullNamespaces(t *testing.T) {
 
 	cfg, err := ReadScanConfig(dir)
 	require.NoError(t, err)
-	assert.Nil(t, cfg.Namespaces)
+	assert.Nil(t, cfg.IDs)
 	assert.Nil(t, cfg.ReverseMapping)
 	assert.Equal(t, "/path/to/bundle", cfg.BundleDir)
 }

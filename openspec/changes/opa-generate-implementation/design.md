@@ -35,26 +35,43 @@ Policy bundle authors include `complytime-mapping.json` in their OCI bundle:
   "version": "1",
   "mappings": [
     {
-      "requirement_id": "CIS-K8S-5.2.6",
-      "namespace": "kubernetes.run_as_root"
+      "id": "kubernetes.run_as_root",
+      "requirement_id": "CIS-K8S-5.2.6"
     },
     {
-      "requirement_id": "CIS-K8S-5.4.1",
-      "namespace": "kubernetes.resource_limits"
+      "id": "kubernetes.resource_limits",
+      "requirement_id": "CIS-K8S-5.4.1"
     }
   ]
 }
 ```
 
+- `id`: The Rego package namespace that identifies this policy. Serves as the semantic, benchmark-agnostic identity (equivalent to AMPEL's granular policy `id` field). Also used as the conftest `--namespace` filter value.
 - `requirement_id`: Must match the Gemara assessment plan's `RequirementID` exactly (like AMPEL's direct map lookup).
-- `namespace`: The Rego `package` name that conftest recognizes for `--namespace` filtering.
 - `version`: Schema version for forward compatibility.
 
 ### Why This Format
 
-The AMPEL provider established the precedent: each granular policy file declares its own `"id"` field, and `MatchPolicies` does exact map lookup (`granular[reqID]`). The OPA mapping file follows the same principle -- policy authors explicitly declare which Rego namespace corresponds to which compliance requirement. This avoids the fragility of deriving IDs from Rego naming conventions.
+The AMPEL provider established the precedent: each granular policy file declares its own `"id"` field as the primary identity, and `MatchPolicies` does exact map lookup (`granular[reqID]`). The OPA mapping file follows the same structural principle -- the `id` field is the semantic identity of the policy, and the `requirement_id` field maps it to a Gemara assessment plan entry.
+
+The Rego namespace is the natural choice for `id` because policy authors already choose descriptive package names (`kubernetes.run_as_root`, `docker.network_encryption`). These serve the same readability purpose as AMPEL's semantic slugs (`require-pull-request`, `block-force-push`). Using the namespace as `id` avoids introducing a third identifier and keeps the mapping file's primary key self-documenting.
 
 The OpenSCAP approach (prefix concatenation with XCCDF rule naming) is not suitable because Rego has no ecosystem-wide naming standard like ComplianceAsCode/SSG provides for XCCDF.
+
+### Design Decision: Rename `namespace` to `id`
+
+**Context**: The original mapping entry schema used `requirement_id` + `namespace` fields. PR #32 (ampel policy ID refactoring) moved AMPEL's granular policy IDs from benchmark-coupled `BP-X.YY` format to semantic, benchmark-agnostic slugs. This established that `id` is the primary identity field across complytime providers, and that identity should be semantic rather than benchmark-coupled.
+
+**Decision**: Use `id` instead of `namespace` as the field name for the Rego package identifier in mapping entries. The `id` field doubles as the conftest `--namespace` value since the Rego package name *is* the semantic identity.
+
+**Rationale**:
+- Consistent with AMPEL's `id`-first pattern across providers
+- The Rego namespace is already semantic and human-readable
+- No new identifier needed -- `id` *is* the namespace
+- Policy authors see `id` as the primary field when reading the mapping file, matching the experience of reading AMPEL granular policy files
+- The reverse mapping in scan-config.json keys on `id` values, making result resolution self-documenting
+
+**Impact**: Field rename only. No change to match logic, validation, scan config format, or fallback behavior. The `id` value is passed directly to `conftest --namespace` flags.
 
 ## Generation Artifact Format
 
@@ -62,7 +79,7 @@ Generate writes `.complytime/opa/generated/scan-config.json`:
 
 ```json
 {
-  "namespaces": ["kubernetes.run_as_root", "kubernetes.resource_limits"],
+  "ids": ["kubernetes.resource_limits", "kubernetes.run_as_root"],
   "reverse_mapping": {
     "kubernetes.run_as_root": "CIS-K8S-5.2.6",
     "kubernetes.resource_limits": "CIS-K8S-5.4.1"
@@ -72,8 +89,8 @@ Generate writes `.complytime/opa/generated/scan-config.json`:
 }
 ```
 
-- `namespaces`: List of Rego namespaces to pass as `--namespace` flags. `null` means use `--all-namespaces` (fallback).
-- `reverse_mapping`: Maps Rego-derived IDs (output of `deriveIDFromQuery`) back to Gemara RequirementIDs. `null` means use `deriveIDFromQuery` as-is (fallback).
+- `ids`: List of matched mapping entry IDs (Rego namespaces) to pass as `conftest --namespace` flags. `null` means use `--all-namespaces` (fallback).
+- `reverse_mapping`: Maps IDs (Rego-derived, from `deriveIDFromQuery`) back to Gemara RequirementIDs. `null` means use `deriveIDFromQuery` as-is (fallback).
 - `bundle_dir`: Path to the pulled bundle for Scan to reference.
 - `generated_at`: ISO 8601 timestamp for freshness tracking.
 
@@ -115,14 +132,14 @@ func (s *ProviderServer) Generate(ctx context.Context, req *provider.GenerateReq
         return &provider.GenerateResponse{Success: true}, nil
     }
 
-    // 6. Match RequirementIDs (exact lookup, like AMPEL)
-    namespaces, reverseMap, warnings := generate.MatchRequirements(req.Configuration, mapping)
+    // 6. Match RequirementIDs to mapping IDs (exact lookup, like AMPEL)
+    ids, reverseMap, warnings := generate.MatchRequirements(req.Configuration, mapping)
     for _, w := range warnings {
         logger.Warn(w)
     }
 
-    // 7. Write scan-config.json
-    generate.WriteScanConfig(cfg.GeneratedDirPath(), namespaces, reverseMap, policyDir)
+    // 7. Write scan-config.json (ids are used as conftest --namespace values)
+    generate.WriteScanConfig(cfg.GeneratedDirPath(), ids, reverseMap, policyDir)
 
     return &provider.GenerateResponse{Success: true}, nil
 }
@@ -135,8 +152,9 @@ Scan reads `scan-config.json` before evaluating. The change is localized to `pro
 ```go
 // In processTarget, after bundle resolution:
 scanCfg, err := generate.ReadScanConfig(cfg.GeneratedDirPath())
-if err == nil && scanCfg.Namespaces != nil {
-    raw, err = scan.EvalPolicyWithNamespaces(inputPath, policyDir, scanCfg.Namespaces, s.opts.Runner)
+if err == nil && scanCfg.IDs != nil {
+    // IDs are Rego namespaces, passed directly to conftest --namespace
+    raw, err = scan.EvalPolicyWithNamespaces(inputPath, policyDir, scanCfg.IDs, s.opts.Runner)
 } else {
     raw, err = scan.EvalPolicy(inputPath, policyDir, s.opts.Runner)
 }
@@ -179,8 +197,8 @@ The reverse mapping is passed from `processTarget` through `evalAndParse` to `To
 
 | Bundle has mapping? | Generate writes | Scan uses | Result IDs |
 |---------------------|----------------|-----------|------------|
-| Yes | `namespaces: [...]`, `reverse_mapping: {...}` | `--namespace ns1 --namespace ns2` | Gemara IDs |
-| No | `namespaces: null`, `reverse_mapping: null` | `--all-namespaces` | Rego-derived |
+| Yes | `ids: [...]`, `reverse_mapping: {...}` | `--namespace id1 --namespace id2` | Gemara IDs |
+| No | `ids: null`, `reverse_mapping: null` | `--all-namespaces` | Rego-derived |
 
 Both modes are first-class. The fallback is permanent, not deprecated.
 

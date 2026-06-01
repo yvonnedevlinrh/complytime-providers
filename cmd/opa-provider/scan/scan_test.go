@@ -150,4 +150,17 @@ func TestEvalPolicy_Failure(t *testing.T) {
 	}
 	_, err := EvalPolicy("/tmp/input", "/tmp/policy", runner)
 	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "evaluating policy")
+}
+
+func TestEvalPolicyWithNamespaces_Failure(t *testing.T) {
+	runner := &mockRunner{
+		response: []byte("error"),
+		err:      fmt.Errorf("exit status 2"),
+	}
+	_, err := EvalPolicyWithNamespaces(
+		"/tmp/input", "/tmp/policy", []string{"ns1"}, runner,
+	)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "evaluating policy")
 }

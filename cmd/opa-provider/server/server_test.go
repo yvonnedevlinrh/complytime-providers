@@ -245,8 +245,8 @@ func TestGenerate_WithMapping(t *testing.T) {
 	mappingData := `{
 		"version": "1",
 		"mappings": [
-			{"requirement_id": "CIS-1", "namespace": "kubernetes.run_as_root"},
-			{"requirement_id": "CIS-2", "namespace": "kubernetes.resource_limits"}
+			{"id": "kubernetes.run_as_root", "requirement_id": "CIS-1"},
+			{"id": "kubernetes.resource_limits", "requirement_id": "CIS-2"}
 		]
 	}`
 	require.NoError(t, os.WriteFile(
@@ -277,7 +277,7 @@ func TestGenerate_WithMapping(t *testing.T) {
 	// Verify scan-config.json was written.
 	scanCfg, err := generate.ReadScanConfig(cfg.GeneratedDirPath())
 	require.NoError(t, err)
-	assert.Equal(t, []string{"kubernetes.resource_limits", "kubernetes.run_as_root"}, scanCfg.Namespaces)
+	assert.Equal(t, []string{"kubernetes.resource_limits", "kubernetes.run_as_root"}, scanCfg.IDs)
 	assert.Equal(t, "CIS-1", scanCfg.ReverseMapping["kubernetes.run_as_root"])
 	assert.Equal(t, "CIS-2", scanCfg.ReverseMapping["kubernetes.resource_limits"])
 }
@@ -310,10 +310,10 @@ func TestGenerate_WithoutMapping(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, resp.Success)
 
-	// Verify scan-config.json was written with nil namespaces.
+	// Verify scan-config.json was written with nil IDs.
 	scanCfg, err := generate.ReadScanConfig(cfg.GeneratedDirPath())
 	require.NoError(t, err)
-	assert.Nil(t, scanCfg.Namespaces)
+	assert.Nil(t, scanCfg.IDs)
 	assert.Nil(t, scanCfg.ReverseMapping)
 }
 
@@ -387,7 +387,7 @@ func TestGenerate_PartialMatch(t *testing.T) {
 	mappingData := `{
 		"version": "1",
 		"mappings": [
-			{"requirement_id": "CIS-1", "namespace": "ns1"}
+			{"id": "ns1", "requirement_id": "CIS-1"}
 		]
 	}`
 	require.NoError(t, os.WriteFile(
@@ -417,8 +417,137 @@ func TestGenerate_PartialMatch(t *testing.T) {
 
 	scanCfg, err := generate.ReadScanConfig(cfg.GeneratedDirPath())
 	require.NoError(t, err)
-	assert.Equal(t, []string{"ns1"}, scanCfg.Namespaces)
+	assert.Equal(t, []string{"ns1"}, scanCfg.IDs)
 	assert.Equal(t, "CIS-1", scanCfg.ReverseMapping["ns1"])
+}
+
+func TestGenerate_Scan_WithMapping(t *testing.T) {
+	// Integration test: Generate with mapping → Scan with namespace filtering →
+	// verify Gemara IDs in response and --namespace flags used (not --all-namespaces).
+	workDir := t.TempDir()
+	bundleRef := "ghcr.io/org/bundle:v1"
+	cfg := config.NewConfig(workDir)
+	require.NoError(t, cfg.EnsureDirectories())
+	policyDir := cfg.PolicyDirForBundle(bundleRef)
+	require.NoError(t, os.MkdirAll(policyDir, 0750))
+
+	mappingData := `{
+		"version": "1",
+		"mappings": [
+			{"id": "kubernetes.run_as_root", "requirement_id": "CIS-K8S-5.2.6"}
+		]
+	}`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(policyDir, "complytime-mapping.json"),
+		[]byte(mappingData), 0600,
+	))
+
+	var usedNamespaceFlags bool
+	runner := &mockRunner{callFn: func(name string, args []string) ([]byte, error) {
+		if name == "conftest" && len(args) > 0 && args[0] == "pull" {
+			return []byte("ok"), nil
+		}
+		if name == "conftest" && len(args) > 0 && args[0] == "test" {
+			for _, a := range args {
+				if a == "--namespace" {
+					usedNamespaceFlags = true
+				}
+				if a == "--all-namespaces" {
+					t.Error("expected --namespace flags, got --all-namespaces")
+				}
+			}
+			return []byte(conftestHappyJSON), nil
+		}
+		return nil, fmt.Errorf("unexpected: %s", name)
+	}}
+
+	ldr := &mockLoader{
+		loadFn: func(_ provider.Target, _ string) (string, error) {
+			return t.TempDir(), nil
+		},
+	}
+
+	srv := New(ServerOptions{
+		Loader:       ldr,
+		Runner:       runner,
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: workDir,
+	})
+
+	// Step 1: Generate with mapping.
+	genResp, err := srv.Generate(context.Background(), &provider.GenerateRequest{
+		TargetVariables: map[string]string{"opa_bundle_ref": bundleRef},
+		Configuration: []provider.AssessmentConfiguration{
+			{RequirementID: "CIS-K8S-5.2.6"},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, genResp.Success)
+
+	// Step 2: Scan.
+	scanResp, err := srv.Scan(context.Background(), &provider.ScanRequest{
+		Targets: []provider.Target{
+			{
+				TargetID: "local-test",
+				Variables: map[string]string{
+					"input_path":     t.TempDir(),
+					"opa_bundle_ref": bundleRef,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, usedNamespaceFlags, "should use --namespace flags, not --all-namespaces")
+
+	// Verify Gemara IDs (not Rego-derived IDs) in response.
+	var reqIDs []string
+	for _, a := range scanResp.Assessments {
+		if a.RequirementID != "scan-status" {
+			reqIDs = append(reqIDs, a.RequirementID)
+		}
+	}
+	assert.Contains(t, reqIDs, "CIS-K8S-5.2.6")
+	assert.NotContains(t, reqIDs, "kubernetes.run_as_root")
+}
+
+func TestMergeVariables(t *testing.T) {
+	tests := []struct {
+		name     string
+		global   map[string]string
+		target   map[string]string
+		expected map[string]string
+	}{
+		{
+			"global only",
+			map[string]string{"opa_bundle_ref": "ghcr.io/bundle:v1"},
+			nil,
+			map[string]string{"opa_bundle_ref": "ghcr.io/bundle:v1"},
+		},
+		{
+			"target overrides global",
+			map[string]string{"opa_bundle_ref": "global-ref"},
+			map[string]string{"opa_bundle_ref": "target-ref"},
+			map[string]string{"opa_bundle_ref": "target-ref"},
+		},
+		{
+			"both nil",
+			nil,
+			nil,
+			map[string]string{},
+		},
+		{
+			"merge distinct keys",
+			map[string]string{"key1": "val1"},
+			map[string]string{"key2": "val2"},
+			map[string]string{"key1": "val1", "key2": "val2"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := mergeVariables(tc.global, tc.target)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
 }
 
 func TestGenerate_Scan_FallbackPath(t *testing.T) {

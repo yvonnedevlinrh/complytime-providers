@@ -18,17 +18,17 @@ const (
 // ScanConfig is the generation artifact written by Generate and read by Scan.
 // Null fields indicate fallback mode (no mapping available).
 type ScanConfig struct {
-	Namespaces     []string          `json:"namespaces"`
+	IDs            []string          `json:"ids"`
 	ReverseMapping map[string]string `json:"reverse_mapping"`
 	BundleDir      string            `json:"bundle_dir"`
 	GeneratedAt    string            `json:"generated_at"`
 }
 
 // WriteScanConfig writes a scan-config.json to the given directory. If
-// namespaces is nil, Scan will fall back to --all-namespaces.
+// ids is nil, Scan will fall back to --all-namespaces.
 func WriteScanConfig(
 	dir string,
-	namespaces []string,
+	ids []string,
 	reverseMap map[string]string,
 	bundleDir string,
 ) error {
@@ -37,7 +37,7 @@ func WriteScanConfig(
 	}
 
 	cfg := ScanConfig{
-		Namespaces:     namespaces,
+		IDs:            ids,
 		ReverseMapping: reverseMap,
 		BundleDir:      bundleDir,
 		GeneratedAt:    time.Now().UTC().Format(time.RFC3339),

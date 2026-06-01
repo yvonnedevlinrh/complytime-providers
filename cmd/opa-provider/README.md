@@ -23,6 +23,11 @@ opa-provider/
 ├── results/              # Package to parse conftest output and produce assessment logs
 │ ├── results_test.go     # Tests for functions in results.go
 │ └── results.go          # Conftest JSON parsing, OSCAL mapping, scan-status assessment
+├── generate/             # Package for Generate RPC mapping and scan config
+│ ├── mapping_test.go     # Tests for functions in mapping.go
+│ ├── mapping.go          # MappingFile loading, validation, requirement matching
+│ ├── scanconfig_test.go  # Tests for functions in scanconfig.go
+│ └── scanconfig.go       # ScanConfig read/write for Generate→Scan handoff
 ├── scan/                 # Package to execute conftest commands
 │ ├── scan_test.go        # Tests for functions in scan.go
 │ └── scan.go             # CommandRunner interface, PullBundle, EvalPolicy
@@ -94,22 +99,47 @@ docker login ghcr.io
 
 ### Generate
 
-The Generate phase is currently a stub that returns success. Policy selection from assessment plans is deferred to a future release.
+When the plugin receives the `generate` command from complyctl, it:
+
+1. Validates that `conftest` and `git` are available on the system PATH
+2. Pulls the OCI policy bundle specified by `opa_bundle_ref`
+3. Looks for a `complytime-mapping.json` file in the root of the pulled bundle
+4. If found: matches each `RequirementID` from the Gemara assessment plan against the mapping entries, produces a list of matched Rego namespace IDs and a reverse mapping for result resolution
+5. Writes a `scan-config.json` artifact to `<workspace>/opa/generated/` for Scan to consume
+
+**Mapping file format:** Policy bundle authors may include a `complytime-mapping.json` file in their OCI bundle to declare which Rego namespace corresponds to which compliance requirement:
+
+```json
+{
+  "version": "1",
+  "mappings": [
+    {"id": "kubernetes.run_as_root", "requirement_id": "CIS-K8S-5.2.6"},
+    {"id": "kubernetes.resource_limits", "requirement_id": "CIS-K8S-5.4.1"}
+  ]
+}
+```
+
+The `id` field is the Rego package namespace (the semantic, benchmark-agnostic identity, equivalent to AMPEL's granular policy `id` field). The `requirement_id` must match the Gemara assessment plan entry exactly.
+
+**Fallback behavior:** Bundles without a `complytime-mapping.json` file continue to work. Generate writes a scan config with null IDs, and Scan falls back to `--all-namespaces` with Rego-derived requirement IDs. This is a first-class supported mode, not a deprecated shim.
 
 ### Scan
 
 When the plugin receives the `scan` command from complyctl, it will:
 1. Validate that `conftest` and `git` are available on the system PATH
-2. Create workspace directories under `<workspace>/opa/{policy,repos,results}/`
-3. For each target:
+2. Create workspace directories under `<workspace>/opa/{policy,repos,results,generated}/`
+3. Read `scan-config.json` from the generated directory (if Generate was run)
+4. For each target:
    - Pull the OPA policy bundle from the OCI registry (cached per unique `opa_bundle_ref`)
    - Load input data (clone git repo with `--depth 1`, or validate local path)
-   - Run `conftest test <path> --policy <dir> --output json --all-namespaces --no-fail`
+   - If scan config has matched IDs: run `conftest test <path> --policy <dir> --output json --namespace <id1> --namespace <id2> ... --no-fail`
+   - Otherwise: run `conftest test <path> --policy <dir> --output json --all-namespaces --no-fail`
    - Parse conftest JSON output into findings grouped by requirement ID
+   - When a reverse mapping is available, resolve Rego-derived IDs to Gemara requirement IDs
    - Write per-target result files as JSON to the results directory
-4. Return assessment results to complyctl with a `scan-status` summary prepended. Operational errors (failed clones, bundle-pull failures, write errors) are reported via `ScanResponse.Errors`.
+5. Return assessment results to complyctl with a `scan-status` summary prepended. Operational errors (failed clones, bundle-pull failures, write errors) are reported via `ScanResponse.Errors`.
 
-**Requirement ID derivation:** Requirement IDs are extracted from conftest query metadata. For example, the query `data.kubernetes.run_as_root.deny` produces the requirement ID `kubernetes.run_as_root` (the `data.` prefix and rule type suffix are stripped).
+**Requirement ID resolution:** When Generate provides a reverse mapping, Rego-derived IDs (e.g., `kubernetes.run_as_root`) are resolved to Gemara requirement IDs (e.g., `CIS-K8S-5.2.6`) in the scan response. Without a mapping, Rego-derived IDs are used directly.
 
 **Error handling:** Per-target errors (clone failures, policy evaluation errors) are reported via `ScanResponse.Errors` and the scan continues with remaining targets. Global errors (missing tools, no targets) return a gRPC-level error immediately.
 
@@ -117,6 +147,7 @@ When the plugin receives the `scan` command from complyctl, it will:
 
 ```
 <workspace>/opa/
+├── generated/    # Generation artifacts (scan-config.json)
 ├── policy/       # Downloaded OPA policy bundles
 ├── repos/        # Cloned git repositories
 └── results/      # Per-target scan result JSON files

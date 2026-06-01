@@ -17,8 +17,8 @@ func TestLoadMapping_Valid(t *testing.T) {
 	data := `{
 		"version": "1",
 		"mappings": [
-			{"requirement_id": "CIS-K8S-5.2.6", "namespace": "kubernetes.run_as_root"},
-			{"requirement_id": "CIS-K8S-5.4.1", "namespace": "kubernetes.resource_limits"}
+			{"id": "kubernetes.run_as_root", "requirement_id": "CIS-K8S-5.2.6"},
+			{"id": "kubernetes.resource_limits", "requirement_id": "CIS-K8S-5.4.1"}
 		]
 	}`
 	require.NoError(t, os.WriteFile(filepath.Join(dir, MappingFileName), []byte(data), 0600))
@@ -27,8 +27,8 @@ func TestLoadMapping_Valid(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "1", mapping.Version)
 	assert.Len(t, mapping.Mappings, 2)
+	assert.Equal(t, "kubernetes.run_as_root", mapping.Mappings[0].ID)
 	assert.Equal(t, "CIS-K8S-5.2.6", mapping.Mappings[0].RequirementID)
-	assert.Equal(t, "kubernetes.run_as_root", mapping.Mappings[0].Namespace)
 }
 
 func TestLoadMapping_MissingFile(t *testing.T) {
@@ -56,13 +56,29 @@ func TestLoadMapping_MalformedJSON(t *testing.T) {
 	assert.Contains(t, err.Error(), "parsing mapping file")
 }
 
+func TestLoadMapping_DuplicateID(t *testing.T) {
+	dir := t.TempDir()
+	data := `{
+		"version": "1",
+		"mappings": [
+			{"id": "ns1", "requirement_id": "CIS-1"},
+			{"id": "ns1", "requirement_id": "CIS-2"}
+		]
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, MappingFileName), []byte(data), 0600))
+
+	_, err := LoadMapping(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate id")
+}
+
 func TestLoadMapping_DuplicateRequirementID(t *testing.T) {
 	dir := t.TempDir()
 	data := `{
 		"version": "1",
 		"mappings": [
-			{"requirement_id": "CIS-1", "namespace": "ns1"},
-			{"requirement_id": "CIS-1", "namespace": "ns2"}
+			{"id": "ns1", "requirement_id": "CIS-1"},
+			{"id": "ns2", "requirement_id": "CIS-1"}
 		]
 	}`
 	require.NoError(t, os.WriteFile(filepath.Join(dir, MappingFileName), []byte(data), 0600))
@@ -72,9 +88,19 @@ func TestLoadMapping_DuplicateRequirementID(t *testing.T) {
 	assert.Contains(t, err.Error(), "duplicate requirement_id")
 }
 
+func TestLoadMapping_EmptyID(t *testing.T) {
+	dir := t.TempDir()
+	data := `{"version": "1", "mappings": [{"id": "", "requirement_id": "CIS-1"}]}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, MappingFileName), []byte(data), 0600))
+
+	_, err := LoadMapping(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty id")
+}
+
 func TestLoadMapping_EmptyRequirementID(t *testing.T) {
 	dir := t.TempDir()
-	data := `{"version": "1", "mappings": [{"requirement_id": "", "namespace": "ns1"}]}`
+	data := `{"version": "1", "mappings": [{"id": "ns1", "requirement_id": ""}]}`
 	require.NoError(t, os.WriteFile(filepath.Join(dir, MappingFileName), []byte(data), 0600))
 
 	_, err := LoadMapping(dir)
@@ -82,22 +108,12 @@ func TestLoadMapping_EmptyRequirementID(t *testing.T) {
 	assert.Contains(t, err.Error(), "empty requirement_id")
 }
 
-func TestLoadMapping_EmptyNamespace(t *testing.T) {
-	dir := t.TempDir()
-	data := `{"version": "1", "mappings": [{"requirement_id": "CIS-1", "namespace": ""}]}`
-	require.NoError(t, os.WriteFile(filepath.Join(dir, MappingFileName), []byte(data), 0600))
-
-	_, err := LoadMapping(dir)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "empty namespace")
-}
-
 func TestMatchRequirements_AllMatched(t *testing.T) {
 	mapping := &MappingFile{
 		Version: "1",
 		Mappings: []MappingEntry{
-			{RequirementID: "CIS-1", Namespace: "kubernetes.run_as_root"},
-			{RequirementID: "CIS-2", Namespace: "kubernetes.resource_limits"},
+			{ID: "kubernetes.run_as_root", RequirementID: "CIS-1"},
+			{ID: "kubernetes.resource_limits", RequirementID: "CIS-2"},
 		},
 	}
 	configs := []provider.AssessmentConfiguration{
@@ -105,9 +121,9 @@ func TestMatchRequirements_AllMatched(t *testing.T) {
 		{RequirementID: "CIS-2"},
 	}
 
-	namespaces, reverseMap, warnings := MatchRequirements(configs, mapping)
+	ids, reverseMap, warnings := MatchRequirements(configs, mapping)
 	assert.Len(t, warnings, 0)
-	assert.Equal(t, []string{"kubernetes.resource_limits", "kubernetes.run_as_root"}, namespaces)
+	assert.Equal(t, []string{"kubernetes.resource_limits", "kubernetes.run_as_root"}, ids)
 	assert.Equal(t, "CIS-1", reverseMap["kubernetes.run_as_root"])
 	assert.Equal(t, "CIS-2", reverseMap["kubernetes.resource_limits"])
 }
@@ -116,7 +132,7 @@ func TestMatchRequirements_PartialMatch(t *testing.T) {
 	mapping := &MappingFile{
 		Version: "1",
 		Mappings: []MappingEntry{
-			{RequirementID: "CIS-1", Namespace: "kubernetes.run_as_root"},
+			{ID: "kubernetes.run_as_root", RequirementID: "CIS-1"},
 		},
 	}
 	configs := []provider.AssessmentConfiguration{
@@ -124,10 +140,10 @@ func TestMatchRequirements_PartialMatch(t *testing.T) {
 		{RequirementID: "CIS-MISSING"},
 	}
 
-	namespaces, reverseMap, warnings := MatchRequirements(configs, mapping)
+	ids, reverseMap, warnings := MatchRequirements(configs, mapping)
 	assert.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "CIS-MISSING")
-	assert.Equal(t, []string{"kubernetes.run_as_root"}, namespaces)
+	assert.Equal(t, []string{"kubernetes.run_as_root"}, ids)
 	assert.Equal(t, "CIS-1", reverseMap["kubernetes.run_as_root"])
 }
 
@@ -140,16 +156,16 @@ func TestMatchRequirements_NoneMatched(t *testing.T) {
 		{RequirementID: "CIS-1"},
 	}
 
-	namespaces, _, warnings := MatchRequirements(configs, mapping)
+	ids, _, warnings := MatchRequirements(configs, mapping)
 	assert.Len(t, warnings, 1)
-	assert.Empty(t, namespaces)
+	assert.Empty(t, ids)
 }
 
 func TestMatchRequirements_DeduplicatesConfigs(t *testing.T) {
 	mapping := &MappingFile{
 		Version: "1",
 		Mappings: []MappingEntry{
-			{RequirementID: "CIS-1", Namespace: "ns1"},
+			{ID: "ns1", RequirementID: "CIS-1"},
 		},
 	}
 	configs := []provider.AssessmentConfiguration{
@@ -157,7 +173,7 @@ func TestMatchRequirements_DeduplicatesConfigs(t *testing.T) {
 		{RequirementID: "CIS-1"},
 	}
 
-	namespaces, _, warnings := MatchRequirements(configs, mapping)
+	ids, _, warnings := MatchRequirements(configs, mapping)
 	assert.Len(t, warnings, 0)
-	assert.Equal(t, []string{"ns1"}, namespaces)
+	assert.Equal(t, []string{"ns1"}, ids)
 }

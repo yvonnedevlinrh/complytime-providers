@@ -24,9 +24,11 @@ type MappingFile struct {
 }
 
 // MappingEntry maps a Gemara assessment plan RequirementID to a Rego namespace.
+// The ID field is the Rego package namespace and serves as the semantic,
+// benchmark-agnostic identity (equivalent to AMPEL's granular policy id field).
 type MappingEntry struct {
+	ID            string `json:"id"`
 	RequirementID string `json:"requirement_id"`
-	Namespace     string `json:"namespace"`
 }
 
 // LoadMapping reads and validates a complytime-mapping.json file from the given
@@ -53,34 +55,39 @@ func LoadMapping(bundleDir string) (*MappingFile, error) {
 
 // validateMapping checks that the mapping file has no empty or duplicate entries.
 func validateMapping(m *MappingFile) error {
-	seen := make(map[string]bool, len(m.Mappings))
+	seenIDs := make(map[string]bool, len(m.Mappings))
+	seenReqIDs := make(map[string]bool, len(m.Mappings))
 	for i, entry := range m.Mappings {
+		if entry.ID == "" {
+			return fmt.Errorf("mapping entry %d has empty id", i)
+		}
 		if entry.RequirementID == "" {
 			return fmt.Errorf("mapping entry %d has empty requirement_id", i)
 		}
-		if entry.Namespace == "" {
-			return fmt.Errorf("mapping entry %d has empty namespace", i)
+		if seenIDs[entry.ID] {
+			return fmt.Errorf("duplicate id %q in mapping", entry.ID)
 		}
-		if seen[entry.RequirementID] {
+		if seenReqIDs[entry.RequirementID] {
 			return fmt.Errorf("duplicate requirement_id %q in mapping", entry.RequirementID)
 		}
-		seen[entry.RequirementID] = true
+		seenIDs[entry.ID] = true
+		seenReqIDs[entry.RequirementID] = true
 	}
 	return nil
 }
 
 // MatchRequirements matches assessment plan RequirementIDs against mapping
 // entries using exact string equality (like AMPEL's MatchPolicies). Returns
-// the matched namespace list, a reverse mapping for result ID resolution,
-// and any warnings for unmatched requirements.
+// the matched ID list (Rego namespaces), a reverse mapping for result ID
+// resolution, and any warnings for unmatched requirements.
 func MatchRequirements(
 	configs []provider.AssessmentConfiguration,
 	mapping *MappingFile,
-) (namespaces []string, reverseMap map[string]string, warnings []string) {
-	// Build lookup map: requirement_id -> namespace
+) (ids []string, reverseMap map[string]string, warnings []string) {
+	// Build lookup map: requirement_id -> id (Rego namespace)
 	lookup := make(map[string]string, len(mapping.Mappings))
 	for _, entry := range mapping.Mappings {
-		lookup[entry.RequirementID] = entry.Namespace
+		lookup[entry.RequirementID] = entry.ID
 	}
 
 	seen := make(map[string]bool)
@@ -93,16 +100,16 @@ func MatchRequirements(
 		}
 		seen[reqID] = true
 
-		ns, ok := lookup[reqID]
+		id, ok := lookup[reqID]
 		if !ok {
 			warnings = append(warnings,
 				fmt.Sprintf("no mapping found for requirement %q", reqID))
 			continue
 		}
-		namespaces = append(namespaces, ns)
-		reverseMap[ns] = reqID
+		ids = append(ids, id)
+		reverseMap[id] = reqID
 	}
 
-	sort.Strings(namespaces)
-	return namespaces, reverseMap, warnings
+	sort.Strings(ids)
+	return ids, reverseMap, warnings
 }

@@ -20,10 +20,10 @@ the mapping pattern established by the AMPEL provider.
 - **REQ-GEN-005**: Unmatched RequirementIDs MUST produce a warning log but
   MUST NOT cause Generate to fail.
 - **REQ-GEN-006**: Generate MUST write a `scan-config.json` artifact to
-  `.complytime/opa/generated/` containing the matched namespace list and
-  reverse mapping.
+  `.complytime/opa/generated/` containing the matched ID list (Rego
+  namespaces) and reverse mapping.
 - **REQ-GEN-007**: When no mapping file is found, Generate MUST log a
-  warning and write a `scan-config.json` with `namespaces: null` and
+  warning and write a `scan-config.json` with `ids: null` and
   `reverse_mapping: null`.
 - **REQ-GEN-008**: Generate MUST return `{Success: false}` with an error
   message when `req.Configuration` is empty.
@@ -35,10 +35,10 @@ the mapping pattern established by the AMPEL provider.
 ### Scan Integration
 
 - **REQ-SCAN-001**: When `scan-config.json` exists with a non-null
-  `namespaces` list, Scan MUST pass `--namespace` flags to conftest instead
-  of `--all-namespaces`.
+  `ids` list, Scan MUST pass each ID as a `--namespace` flag to conftest
+  instead of `--all-namespaces`.
 - **REQ-SCAN-002**: When `scan-config.json` is absent or has
-  `namespaces: null`, Scan MUST use `--all-namespaces` (current behavior).
+  `ids: null`, Scan MUST use `--all-namespaces` (current behavior).
 - **REQ-SCAN-003**: When a reverse mapping is available, `ToScanResponse`
   MUST replace Rego-derived RequirementIDs with Gemara RequirementIDs in
   `AssessmentLog.RequirementID`.
@@ -48,10 +48,12 @@ the mapping pattern established by the AMPEL provider.
 ### Mapping File Format
 
 - **REQ-MAP-001**: The mapping file format MUST be JSON with a `version`
-  field and a `mappings` array of `{requirement_id, namespace}` objects.
+  field and a `mappings` array of `{id, requirement_id}` objects. The
+  `id` field is the Rego package namespace (semantic policy identity);
+  `requirement_id` maps to the Gemara assessment plan.
 - **REQ-MAP-002**: The mapping file MUST be validated: reject empty
-  `requirement_id` or `namespace` values, reject duplicate
-  `requirement_id` entries.
+  `id` or `requirement_id` values, reject duplicate `id` entries,
+  reject duplicate `requirement_id` entries.
 - **REQ-MAP-003**: The mapping file name MUST be `complytime-mapping.json`.
 
 ### Backward Compatibility
