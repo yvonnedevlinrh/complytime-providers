@@ -1,4 +1,4 @@
 [
-  {"PlanID": "test-plan", "RequirementID": "BP-1.01"},
-  {"PlanID": "test-plan", "RequirementID": "BP-3.01"}
+  {"PlanID": "test-plan", "RequirementID": "require-pull-request"},
+  {"PlanID": "test-plan", "RequirementID": "block-force-push"}
 ]

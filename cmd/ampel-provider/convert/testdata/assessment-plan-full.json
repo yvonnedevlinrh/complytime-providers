@@ -1,7 +1,7 @@
 [
-  {"PlanID": "test-plan", "RequirementID": "BP-1.01"},
-  {"PlanID": "test-plan", "RequirementID": "BP-2.01"},
-  {"PlanID": "test-plan", "RequirementID": "BP-3.01"},
-  {"PlanID": "test-plan", "RequirementID": "BP-4.01"},
-  {"PlanID": "test-plan", "RequirementID": "BP-5.01"}
+  {"PlanID": "test-plan", "RequirementID": "block-force-push"},
+  {"PlanID": "test-plan", "RequirementID": "minimum-approvals"},
+  {"PlanID": "test-plan", "RequirementID": "prevent-admin-bypass"},
+  {"PlanID": "test-plan", "RequirementID": "require-code-owner-review"},
+  {"PlanID": "test-plan", "RequirementID": "require-pull-request"}
 ]

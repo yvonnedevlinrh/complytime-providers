@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/complytime/complyctl/pkg/provider"
@@ -37,11 +39,11 @@ func TestLoadGranularPolicies(t *testing.T) {
 	require.Len(t, policies, 5)
 
 	expectedIDs := []string{
-		"BP-1.01",
-		"BP-2.01",
-		"BP-3.01",
-		"BP-4.01",
-		"BP-5.01",
+		"block-force-push",
+		"minimum-approvals",
+		"prevent-admin-bypass",
+		"require-code-owner-review",
+		"require-pull-request",
 	}
 	for _, id := range expectedIDs {
 		p, ok := policies[id]
@@ -115,6 +117,364 @@ func TestLoadGranularPolicies_SkipsNonJSON(t *testing.T) {
 	require.Len(t, policies, 1)
 }
 
+func TestLoadGranularPolicies_Subdirectory(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "subdir")
+	require.NoError(t, os.MkdirAll(sub, 0o750))
+
+	p := AmpelPolicy{
+		ID:     "sub-policy-01",
+		Meta:   PolicyMeta{Description: "in subdir"},
+		Tenets: []AmpelTenet{{ID: "01", Code: "true"}},
+	}
+	data, err := json.Marshal(p)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sub, "sub-policy-01.json"), data, 0o600,
+	))
+
+	policies, err := LoadGranularPolicies(dir)
+	require.NoError(t, err)
+	require.Len(t, policies, 1)
+	assert.Contains(t, policies, "sub-policy-01")
+}
+
+func TestLoadGranularPolicies_MixedFlatAndSubdirectory(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "nested")
+	require.NoError(t, os.MkdirAll(sub, 0o750))
+
+	// Policy at root level.
+	rootPolicy := AmpelPolicy{
+		ID:     "root-policy",
+		Meta:   PolicyMeta{Description: "at root"},
+		Tenets: []AmpelTenet{{ID: "01", Code: "true"}},
+	}
+	rootData, err := json.Marshal(rootPolicy)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "root-policy.json"), rootData, 0o600,
+	))
+
+	// Policy in subdirectory.
+	subPolicy := AmpelPolicy{
+		ID:     "nested-policy",
+		Meta:   PolicyMeta{Description: "in nested"},
+		Tenets: []AmpelTenet{{ID: "01", Code: "true"}},
+	}
+	subData, err := json.Marshal(subPolicy)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sub, "nested-policy.json"), subData, 0o600,
+	))
+
+	policies, err := LoadGranularPolicies(dir)
+	require.NoError(t, err)
+	require.Len(t, policies, 2)
+	assert.Contains(t, policies, "root-policy")
+	assert.Contains(t, policies, "nested-policy")
+}
+
+func TestLoadGranularPolicies_PolicyFileNameSkipInSubdirectory(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "subdir")
+	require.NoError(t, os.MkdirAll(sub, 0o750))
+
+	// Place PolicyFileName in subdir — should be skipped.
+	bundle := AmpelPolicyBundle{ID: "should-skip"}
+	bData, err := json.Marshal(bundle)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sub, PolicyFileName), bData, 0o600,
+	))
+
+	// Place a valid policy alongside it.
+	p := AmpelPolicy{
+		ID:     "valid-policy",
+		Meta:   PolicyMeta{Description: "valid"},
+		Tenets: []AmpelTenet{{ID: "01", Code: "true"}},
+	}
+	pData, err := json.Marshal(p)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sub, "valid-policy.json"), pData, 0o600,
+	))
+
+	policies, err := LoadGranularPolicies(dir)
+	require.NoError(t, err)
+	require.Len(t, policies, 1)
+	assert.Contains(t, policies, "valid-policy")
+	assert.NotContains(t, policies, "should-skip")
+}
+
+func TestLoadGranularPolicies_NestedSubdirectories(t *testing.T) {
+	dir := t.TempDir()
+	level1 := filepath.Join(dir, "level1")
+	level2 := filepath.Join(level1, "level2")
+	require.NoError(t, os.MkdirAll(level2, 0o750))
+
+	// Policy at level 1.
+	p1 := AmpelPolicy{
+		ID:     "level1-policy",
+		Meta:   PolicyMeta{Description: "depth 1"},
+		Tenets: []AmpelTenet{{ID: "01", Code: "true"}},
+	}
+	d1, err := json.Marshal(p1)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(level1, "level1-policy.json"), d1, 0o600,
+	))
+
+	// Policy at level 2.
+	p2 := AmpelPolicy{
+		ID:     "level2-policy",
+		Meta:   PolicyMeta{Description: "depth 2"},
+		Tenets: []AmpelTenet{{ID: "01", Code: "true"}},
+	}
+	d2, err := json.Marshal(p2)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(level2, "level2-policy.json"), d2, 0o600,
+	))
+
+	policies, err := LoadGranularPolicies(dir)
+	require.NoError(t, err)
+	require.Len(t, policies, 2)
+	assert.Contains(t, policies, "level1-policy")
+	assert.Contains(t, policies, "level2-policy")
+}
+
+func TestLoadGranularPolicies_NonJSONInSubdirectory(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "subdir")
+	require.NoError(t, os.MkdirAll(sub, 0o750))
+
+	// Valid JSON policy in subdir.
+	p := AmpelPolicy{
+		ID:     "json-policy",
+		Meta:   PolicyMeta{Description: "valid"},
+		Tenets: []AmpelTenet{{ID: "01", Code: "true"}},
+	}
+	pData, err := json.Marshal(p)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sub, "json-policy.json"), pData, 0o600,
+	))
+
+	// Non-JSON files in subdir — should be skipped.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sub, "readme.txt"), []byte("hello"), 0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sub, "notes.md"), []byte("# Notes"), 0o600,
+	))
+
+	policies, err := LoadGranularPolicies(dir)
+	require.NoError(t, err)
+	require.Len(t, policies, 1)
+	assert.Contains(t, policies, "json-policy")
+}
+
+func TestLoadGranularPolicies_MalformedJSONInSubdirectory(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "subdir")
+	require.NoError(t, os.MkdirAll(sub, 0o750))
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sub, "bad.json"), []byte("{invalid json"), 0o600,
+	))
+
+	_, err := LoadGranularPolicies(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parsing policy file")
+}
+
+func TestLoadGranularPolicies_EmptyIDInSubdirectory(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "subdir")
+	require.NoError(t, os.MkdirAll(sub, 0o750))
+
+	data := `{"id": "", "meta": {"description": "empty"}, "tenets": []}`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sub, "empty-id.json"), []byte(data), 0o600,
+	))
+
+	_, err := LoadGranularPolicies(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty id field")
+}
+
+func TestLoadGranularPolicies_UnreadableFileInSubdirectory(t *testing.T) {
+	// Skip when running as root because root can read any file.
+	if os.Getuid() == 0 {
+		t.Skip("skipping: test requires non-root user")
+	}
+
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "subdir")
+	require.NoError(t, os.MkdirAll(sub, 0o750))
+
+	unreadable := filepath.Join(sub, "secret.json")
+	require.NoError(t, os.WriteFile(unreadable, []byte(`{}`), 0o600))
+	require.NoError(t, os.Chmod(unreadable, 0o000))
+
+	_, err := LoadGranularPolicies(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading policy file")
+}
+
+func TestLoadGranularPolicies_DuplicatePolicyIDs(t *testing.T) {
+	dir := t.TempDir()
+	sub1 := filepath.Join(dir, "dir-a")
+	sub2 := filepath.Join(dir, "dir-b")
+	require.NoError(t, os.MkdirAll(sub1, 0o750))
+	require.NoError(t, os.MkdirAll(sub2, 0o750))
+
+	// Same ID in two different subdirectories.
+	p := AmpelPolicy{
+		ID:     "duplicate-id",
+		Meta:   PolicyMeta{Description: "first"},
+		Tenets: []AmpelTenet{{ID: "01", Code: "true"}},
+	}
+	pData, err := json.Marshal(p)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sub1, "dup.json"), pData, 0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sub2, "dup.json"), pData, 0o600,
+	))
+
+	_, err = LoadGranularPolicies(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate policy id")
+	assert.Contains(t, err.Error(), "duplicate-id")
+	// Error should mention both paths.
+	assert.Contains(t, err.Error(), "dir-a")
+	assert.Contains(t, err.Error(), "dir-b")
+}
+
+func TestLoadGranularPolicies_SymlinkToDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping: symlinks may not be supported on Windows")
+	}
+
+	dir := t.TempDir()
+
+	// Target directory with a policy that should NOT be reached.
+	target := filepath.Join(dir, "target")
+	require.NoError(t, os.MkdirAll(target, 0o750))
+	p := AmpelPolicy{
+		ID:     "symlinked-policy",
+		Meta:   PolicyMeta{Description: "behind symlink"},
+		Tenets: []AmpelTenet{{ID: "01", Code: "true"}},
+	}
+	pData, err := json.Marshal(p)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(target, "symlinked.json"), pData, 0o600,
+	))
+
+	// Create a symlink inside the walk root pointing to target.
+	walkRoot := filepath.Join(dir, "root")
+	require.NoError(t, os.MkdirAll(walkRoot, 0o750))
+	linkPath := filepath.Join(walkRoot, "linked-dir")
+	err = os.Symlink(target, linkPath)
+	if err != nil {
+		t.Skipf("skipping: cannot create symlink: %v", err)
+	}
+
+	policies, err := LoadGranularPolicies(walkRoot)
+	require.NoError(t, err)
+	// The symlink directory is not followed, so no policies loaded.
+	assert.Empty(t, policies)
+}
+
+func TestLoadGranularPolicies_EmptySubdirectory(t *testing.T) {
+	dir := t.TempDir()
+
+	// Empty subdirectory.
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(dir, "empty-sub"), 0o750,
+	))
+
+	// Populated subdirectory.
+	populated := filepath.Join(dir, "populated-sub")
+	require.NoError(t, os.MkdirAll(populated, 0o750))
+	p := AmpelPolicy{
+		ID:     "populated-policy",
+		Meta:   PolicyMeta{Description: "has content"},
+		Tenets: []AmpelTenet{{ID: "01", Code: "true"}},
+	}
+	pData, err := json.Marshal(p)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(populated, "populated-policy.json"), pData, 0o600,
+	))
+
+	policies, err := LoadGranularPolicies(dir)
+	require.NoError(t, err)
+	require.Len(t, policies, 1)
+	assert.Contains(t, policies, "populated-policy")
+}
+
+func TestLoadGranularPolicies_DuplicateIDsSameDirectory(t *testing.T) {
+	dir := t.TempDir()
+
+	p := AmpelPolicy{
+		ID:     "same-id",
+		Meta:   PolicyMeta{Description: "first"},
+		Tenets: []AmpelTenet{{ID: "01", Code: "true"}},
+	}
+	data, err := json.Marshal(p)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "first.json"), data, 0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "second.json"), data, 0o600,
+	))
+
+	_, err = LoadGranularPolicies(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate policy id")
+	assert.Contains(t, err.Error(), "same-id")
+}
+
+func TestLoadGranularPolicies_SymlinkToFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping symlink test on Windows")
+	}
+	dir := t.TempDir()
+
+	// Create a real policy file outside the walk root.
+	outside := filepath.Join(dir, "outside")
+	require.NoError(t, os.MkdirAll(outside, 0o750))
+	p := AmpelPolicy{
+		ID:     "linked-policy",
+		Meta:   PolicyMeta{Description: "symlinked file"},
+		Tenets: []AmpelTenet{{ID: "01", Code: "true"}},
+	}
+	data, err := json.Marshal(p)
+	require.NoError(t, err)
+	realFile := filepath.Join(outside, "real.json")
+	require.NoError(t, os.WriteFile(realFile, data, 0o600))
+
+	// Create the walk root with a symlink to the file.
+	walkRoot := filepath.Join(dir, "root")
+	require.NoError(t, os.MkdirAll(walkRoot, 0o750))
+	linkPath := filepath.Join(walkRoot, "linked.json")
+	err = os.Symlink(realFile, linkPath)
+	if err != nil {
+		t.Skipf("skipping: cannot create symlink: %v", err)
+	}
+
+	policies, err := LoadGranularPolicies(walkRoot)
+	require.NoError(t, err)
+	// The symlinked file should be skipped.
+	assert.Empty(t, policies)
+}
+
 // --- MatchPolicies tests ---
 
 func TestMatchPolicies(t *testing.T) {
@@ -143,8 +503,8 @@ func TestMatchPolicies_Subset(t *testing.T) {
 
 	require.Len(t, matched, 2)
 	require.Empty(t, warnings)
-	require.Equal(t, "BP-1.01", matched[0].ID)
-	require.Equal(t, "BP-3.01", matched[1].ID)
+	require.Equal(t, "block-force-push", matched[0].ID)
+	require.Equal(t, "require-pull-request", matched[1].ID)
 }
 
 func TestMatchPolicies_UnmatchedRule(t *testing.T) {
@@ -152,13 +512,13 @@ func TestMatchPolicies_UnmatchedRule(t *testing.T) {
 	require.NoError(t, err)
 
 	input := []provider.AssessmentConfiguration{
-		{RequirementID: "BP-1.01"},
+		{RequirementID: "require-pull-request"},
 		{RequirementID: "nonexistent-rule"},
 	}
 
 	matched, warnings := MatchPolicies(input, granular)
 	require.Len(t, matched, 1)
-	require.Equal(t, "BP-1.01", matched[0].ID)
+	require.Equal(t, "require-pull-request", matched[0].ID)
 	require.Len(t, warnings, 1)
 	require.Contains(t, warnings[0], "nonexistent-rule")
 }
@@ -191,8 +551,8 @@ func TestMatchPolicies_DuplicateRequirements(t *testing.T) {
 	require.NoError(t, err)
 
 	input := []provider.AssessmentConfiguration{
-		{RequirementID: "BP-1.01"},
-		{RequirementID: "BP-1.01"},
+		{RequirementID: "require-pull-request"},
+		{RequirementID: "require-pull-request"},
 	}
 
 	matched, warnings := MatchPolicies(input, granular)
@@ -204,8 +564,8 @@ func TestMatchPolicies_DuplicateRequirements(t *testing.T) {
 
 func TestMergeToBundle(t *testing.T) {
 	policies := []*AmpelPolicy{
-		{ID: "BP-1.01", Meta: PolicyMeta{Description: "PR required"}, Tenets: []AmpelTenet{{ID: "01"}}},
-		{ID: "BP-3.01", Meta: PolicyMeta{Description: "Force push"}, Tenets: []AmpelTenet{{ID: "01"}}},
+		{ID: "block-force-push", Meta: PolicyMeta{Description: "Force push"}, Tenets: []AmpelTenet{{ID: "01"}}},
+		{ID: "require-pull-request", Meta: PolicyMeta{Description: "PR required"}, Tenets: []AmpelTenet{{ID: "01"}}},
 	}
 
 	bundle := MergeToBundle(policies)
@@ -213,8 +573,8 @@ func TestMergeToBundle(t *testing.T) {
 	require.Len(t, bundle.Meta.Frameworks, 1)
 	require.Equal(t, "ComplyTime-AMPEL-Policy", bundle.Meta.Frameworks[0].ID)
 	require.Len(t, bundle.Policies, 2)
-	require.Equal(t, "BP-1.01", bundle.Policies[0].ID)
-	require.Equal(t, "BP-3.01", bundle.Policies[1].ID)
+	require.Equal(t, "block-force-push", bundle.Policies[0].ID)
+	require.Equal(t, "require-pull-request", bundle.Policies[1].ID)
 }
 
 func TestMergeToBundle_Empty(t *testing.T) {

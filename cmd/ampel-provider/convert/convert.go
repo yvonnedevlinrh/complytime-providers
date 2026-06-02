@@ -1,8 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+
 package convert
 
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,44 +19,105 @@ const (
 	PolicyFileName = "complytime-ampel-policy.json"
 )
 
-// LoadGranularPolicies reads all .json files from dir (skipping PolicyFileName)
-// and returns a map keyed by each policy's ID field.
+// LoadGranularPolicies recursively reads all .json files from dir
+// (skipping PolicyFileName and symbolic links) and returns a map
+// keyed by each policy's ID field. Duplicate policy IDs across
+// files produce an error.
 func LoadGranularPolicies(dir string) (map[string]*AmpelPolicy, error) {
-	entries, err := os.ReadDir(dir)
+	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return nil, fmt.Errorf("reading policy directory %q: %w", dir, err)
+		return nil, fmt.Errorf("opening policy directory %q: %w", dir, err)
 	}
+	defer root.Close()
 
 	policies := make(map[string]*AmpelPolicy)
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		if entry.Name() == PolicyFileName {
-			continue
-		}
+	// idPaths tracks which file first defined each policy ID
+	// so duplicate-ID errors can reference both paths.
+	idPaths := make(map[string]string)
 
-		path := filepath.Join(dir, entry.Name())
-		data, err := os.ReadFile(path)
+	walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil, fmt.Errorf("reading policy file %q: %w", path, err)
+			return err
 		}
-
-		var p AmpelPolicy
-		if err := json.Unmarshal(data, &p); err != nil {
-			return nil, fmt.Errorf("parsing policy file %q: %w", path, err)
+		if skipEntry(d) {
+			return nil
 		}
-		if p.ID == "" {
-			return nil, fmt.Errorf("policy file %q has empty id field", path)
-		}
-
-		policies[p.ID] = &p
+		return loadPolicy(root, dir, path, policies, idPaths)
+	})
+	if walkErr != nil {
+		return nil, walkErr
 	}
 
 	return policies, nil
+}
+
+// skipEntry returns true for directory entries, symbolic links,
+// non-JSON files, and the merged policy bundle output file.
+func skipEntry(d fs.DirEntry) bool {
+	if d.IsDir() {
+		return true
+	}
+	if d.Type()&fs.ModeSymlink != 0 {
+		return true
+	}
+	if filepath.Ext(d.Name()) != ".json" {
+		return true
+	}
+	return d.Name() == PolicyFileName
+}
+
+// loadPolicy reads a single policy JSON file through the root-scoped
+// handle, parses it, checks for duplicates, and adds it to the map.
+func loadPolicy(
+	root *os.Root,
+	dir, path string,
+	policies map[string]*AmpelPolicy,
+	idPaths map[string]string,
+) error {
+	relPath, relErr := filepath.Rel(dir, path)
+	if relErr != nil {
+		return fmt.Errorf("computing relative path for %q: %w", path, relErr)
+	}
+
+	data, readErr := readRootFile(root, relPath, path)
+	if readErr != nil {
+		return readErr
+	}
+
+	var p AmpelPolicy
+	if unmarshalErr := json.Unmarshal(data, &p); unmarshalErr != nil {
+		return fmt.Errorf("parsing policy file %q: %w", path, unmarshalErr)
+	}
+	if p.ID == "" {
+		return fmt.Errorf("policy file %q has empty id field", path)
+	}
+
+	if existingPath, exists := idPaths[p.ID]; exists {
+		return fmt.Errorf(
+			"duplicate policy id %q found in %q and %q",
+			p.ID, existingPath, path,
+		)
+	}
+	idPaths[p.ID] = path
+	policies[p.ID] = &p
+
+	return nil
+}
+
+// readRootFile reads a file using the root-scoped API to prevent
+// symlink TOCTOU traversal.
+func readRootFile(root *os.Root, relPath, absPath string) ([]byte, error) {
+	f, openErr := root.Open(relPath)
+	if openErr != nil {
+		return nil, fmt.Errorf("reading policy file %q: %w", absPath, openErr)
+	}
+	defer f.Close()
+
+	data, readErr := io.ReadAll(f)
+	if readErr != nil {
+		return nil, fmt.Errorf("reading policy file %q: %w", absPath, readErr)
+	}
+	return data, nil
 }
 
 // MatchPolicies looks up each requirement ID from the assessment configurations
