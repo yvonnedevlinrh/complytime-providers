@@ -165,12 +165,9 @@ func WritePerTargetResult(result *PerTargetResult, dir string) error {
 }
 
 // ResolveRequirementID resolves a Rego-derived requirement ID to a Gemara
-// requirement ID using the reverse mapping. If the mapping is nil or does not
-// contain the derived ID, the original ID is returned unchanged.
+// requirement ID using the reverse mapping. If the mapping does not contain
+// the derived ID, the original ID is returned unchanged.
 func ResolveRequirementID(derivedID string, reverseMap map[string]string) string {
-	if reverseMap == nil {
-		return derivedID
-	}
 	if gemaraID, ok := reverseMap[derivedID]; ok {
 		return gemaraID
 	}

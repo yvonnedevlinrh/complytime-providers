@@ -40,31 +40,11 @@ func PullBundle(bundleRef, policyDir string, runner CommandRunner) error {
 	return nil
 }
 
-// EvalPolicy evaluates configuration files against OPA policies using conftest.
-func EvalPolicy(inputPath, policyDir string, runner CommandRunner) ([]byte, error) {
-	name, args := constructConftestTestCommand(inputPath, policyDir)
-	output, err := runner.Run(name, args...)
-	if err != nil {
-		return nil, fmt.Errorf("evaluating policy on %q: %w (output: %s)", inputPath, err, string(output))
-	}
-	return output, nil
-}
-
 func constructConftestPullCommand(bundleRef, policyDir string) (string, []string) {
 	return "conftest", []string{
 		"pull",
 		"oci://" + strings.TrimPrefix(bundleRef, "oci://"),
 		"--policy", policyDir,
-	}
-}
-
-func constructConftestTestCommand(inputPath, policyDir string) (string, []string) {
-	return "conftest", []string{
-		"test", inputPath,
-		"--policy", policyDir,
-		"--output", "json",
-		"--all-namespaces",
-		"--no-fail",
 	}
 }
 

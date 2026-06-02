@@ -82,8 +82,9 @@ func (s *ProviderServer) Describe(
 }
 
 // Generate reads the assessment plan's RequirementIDs, pulls the OCI policy
-// bundle, loads the optional mapping file, matches requirements to Rego
-// namespaces, and writes a scan-config.json for Scan to consume.
+// bundle, loads the required mapping file, matches requirements to Rego
+// namespaces, and writes a scan-config.json for Scan to consume. Returns
+// {Success: false} if the mapping file is missing or invalid.
 func (s *ProviderServer) Generate(
 	_ context.Context, req *provider.GenerateRequest,
 ) (*provider.GenerateResponse, error) {
@@ -132,14 +133,21 @@ func (s *ProviderServer) Generate(
 
 	mapping, err := generate.LoadMapping(policyDir)
 	if err != nil {
-		logger.Warn("no complytime-mapping.json in bundle, skipping requirement filtering",
-			"error", err)
-		if writeErr := generate.WriteScanConfig(
-			cfg.GeneratedDirPath(), nil, nil, policyDir,
-		); writeErr != nil {
-			return nil, fmt.Errorf("writing scan config: %w", writeErr)
+		if errors.Is(err, generate.ErrMappingNotFound) {
+			return &provider.GenerateResponse{
+				Success: false,
+				ErrorMessage: fmt.Sprintf(
+					"OCI bundle does not contain %s; "+
+						"policy bundles must include a mapping file "+
+						"to enable requirement-scoped evaluation",
+					generate.MappingFileName,
+				),
+			}, nil
 		}
-		return &provider.GenerateResponse{Success: true}, nil
+		return &provider.GenerateResponse{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("invalid mapping file: %s", err),
+		}, nil
 	}
 
 	ids, reverseMap, warnings := generate.MatchRequirements(
@@ -199,10 +207,10 @@ func (s *ProviderServer) Scan(
 		return nil, fmt.Errorf("directory setup failed: %w", err)
 	}
 
-	// Read scan config if Generate was run.
+	// Read scan config written by Generate.
 	scanCfg, scanCfgErr := generate.ReadScanConfig(cfg.GeneratedDirPath())
 	if scanCfgErr != nil {
-		logger.Info("no scan config found, using unfiltered evaluation")
+		logger.Warn("no scan config found; run Generate before Scan", "error", scanCfgErr)
 	}
 
 	bundleCache := map[string]string{}
@@ -413,15 +421,16 @@ func (s *ProviderServer) evalAndParse(
 ) (*results.PerTargetResult, error) {
 	logger.Info("evaluating policies", "path", inputPath)
 
-	var raw []byte
-	var err error
-	if scanCfg != nil && scanCfg.IDs != nil {
-		raw, err = scan.EvalPolicyWithNamespaces(
-			inputPath, policyDir, scanCfg.IDs, s.opts.Runner,
+	if scanCfg == nil || scanCfg.IDs == nil {
+		return nil, fmt.Errorf(
+			"scan config missing or has no requirement IDs; run Generate first with a bundle containing %s",
+			generate.MappingFileName,
 		)
-	} else {
-		raw, err = scan.EvalPolicy(inputPath, policyDir, s.opts.Runner)
 	}
+
+	raw, err := scan.EvalPolicyWithNamespaces(
+		inputPath, policyDir, scanCfg.IDs, s.opts.Runner,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("evaluating policies: %w", err)
 	}
