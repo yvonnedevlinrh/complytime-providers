@@ -21,12 +21,13 @@ Build, test, and lint commands derived from `Makefile` and
 `.github/workflows/ci.yml`:
 
 ```bash
-# Build both provider binaries to bin/
+# Build all provider binaries to bin/
 make build
 
 # Build individual providers
 make build-openscap-provider
 make build-ampel-provider
+make build-opa-provider
 
 # Run all unit tests
 make test
@@ -69,6 +70,7 @@ complytime-providers/
 │   │   └── toolcheck/         #   Tool availability checking
 │   └── opa-provider/          # Binary: complyctl-provider-opa
 │       ├── config/            #   Configuration handling
+│       ├── generate/          #   Generate RPC: mapping & scan config
 │       ├── loader/            #   Data loading (git clone, local path)
 │       ├── results/           #   Conftest result parsing & mapping
 │       ├── scan/              #   Conftest command execution
@@ -104,7 +106,7 @@ complytime-providers/
 - **Framework**: Go stdlib `testing` + `github.com/stretchr/testify`
   (assert/require)
 - **Naming**: `TestFunctionName_Description` pattern
-- **Coverage**: 18 test files across all subpackages (every non-type
+- **Coverage**: 28 test files across all subpackages (every non-type
   package has a corresponding `_test.go`)
 - **Test data**: XML fixtures stored in
   `internal/complytime/testdata/openscap/`
@@ -198,7 +200,7 @@ before writing or reviewing code.
 
 ## Architecture
 
-Both providers follow an identical plugin pattern: `main.go`
+All three providers follow an identical plugin pattern: `main.go`
 instantiates the provider via `server.New()` and passes it to
 `provider.Serve()` from the `complyctl` package. The complyctl
 framework manages gRPC subprocess lifecycle via hashicorp/go-plugin.

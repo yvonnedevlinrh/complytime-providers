@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/complytime/complyctl/pkg/provider"
+	"github.com/complytime/complytime-providers/cmd/opa-provider/config"
+	"github.com/complytime/complytime-providers/cmd/opa-provider/generate"
 )
 
 // --- Mocks ---
@@ -222,13 +224,394 @@ func TestDescribe_Variables(t *testing.T) {
 
 // --- Generate tests ---
 
-func TestGenerate_ReturnsSuccess(t *testing.T) {
+func TestGenerate_EmptyConfiguration(t *testing.T) {
 	srv := New(ServerOptions{})
 	resp, err := srv.Generate(
 		context.Background(), &provider.GenerateRequest{},
 	)
 	require.NoError(t, err)
+	assert.False(t, resp.Success)
+	assert.Contains(t, resp.ErrorMessage, "no assessment configurations provided")
+}
+
+func TestGenerate_WithMapping(t *testing.T) {
+	workDir := t.TempDir()
+	bundleRef := "ghcr.io/org/bundle:v1"
+	cfg := config.NewConfig(workDir)
+	require.NoError(t, cfg.EnsureDirectories())
+	policyDir := cfg.PolicyDirForBundle(bundleRef)
+	require.NoError(t, os.MkdirAll(policyDir, 0750))
+
+	mappingData := `{
+		"version": "1",
+		"mappings": [
+			{"id": "kubernetes.run_as_root", "requirement_id": "CIS-1"},
+			{"id": "kubernetes.resource_limits", "requirement_id": "CIS-2"}
+		]
+	}`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(policyDir, "complytime-mapping.json"),
+		[]byte(mappingData), 0600,
+	))
+
+	runner := &mockRunner{callFn: func(name string, args []string) ([]byte, error) {
+		return []byte("ok"), nil
+	}}
+
+	srv := New(ServerOptions{
+		Runner:       runner,
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: workDir,
+	})
+
+	resp, err := srv.Generate(context.Background(), &provider.GenerateRequest{
+		TargetVariables: map[string]string{"opa_bundle_ref": bundleRef},
+		Configuration: []provider.AssessmentConfiguration{
+			{RequirementID: "CIS-1"},
+			{RequirementID: "CIS-2"},
+		},
+	})
+	require.NoError(t, err)
 	assert.True(t, resp.Success)
+
+	// Verify scan-config.json was written.
+	scanCfg, err := generate.ReadScanConfig(cfg.GeneratedDirPath())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"kubernetes.resource_limits", "kubernetes.run_as_root"}, scanCfg.IDs)
+	assert.Equal(t, "CIS-1", scanCfg.ReverseMapping["kubernetes.run_as_root"])
+	assert.Equal(t, "CIS-2", scanCfg.ReverseMapping["kubernetes.resource_limits"])
+}
+
+func TestGenerate_WithoutMapping(t *testing.T) {
+	workDir := t.TempDir()
+	bundleRef := "ghcr.io/org/bundle:v1"
+	cfg := config.NewConfig(workDir)
+	require.NoError(t, cfg.EnsureDirectories())
+	policyDir := cfg.PolicyDirForBundle(bundleRef)
+	require.NoError(t, os.MkdirAll(policyDir, 0750))
+	// No mapping file -- fallback path.
+
+	runner := &mockRunner{callFn: func(name string, args []string) ([]byte, error) {
+		return []byte("ok"), nil
+	}}
+
+	srv := New(ServerOptions{
+		Runner:       runner,
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: workDir,
+	})
+
+	resp, err := srv.Generate(context.Background(), &provider.GenerateRequest{
+		TargetVariables: map[string]string{"opa_bundle_ref": bundleRef},
+		Configuration: []provider.AssessmentConfiguration{
+			{RequirementID: "CIS-1"},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Success)
+
+	// Verify scan-config.json was written with nil IDs.
+	scanCfg, err := generate.ReadScanConfig(cfg.GeneratedDirPath())
+	require.NoError(t, err)
+	assert.Nil(t, scanCfg.IDs)
+	assert.Nil(t, scanCfg.ReverseMapping)
+}
+
+func TestGenerate_MissingBundleRef(t *testing.T) {
+	srv := New(ServerOptions{
+		Runner:       &mockRunner{},
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: t.TempDir(),
+	})
+
+	resp, err := srv.Generate(context.Background(), &provider.GenerateRequest{
+		Configuration: []provider.AssessmentConfiguration{
+			{RequirementID: "CIS-1"},
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Success)
+	assert.Contains(t, resp.ErrorMessage, "opa_bundle_ref")
+}
+
+func TestGenerate_ToolCheckFailure(t *testing.T) {
+	srv := New(ServerOptions{
+		ToolChecker: func() ([]string, error) {
+			return []string{"conftest"}, nil
+		},
+		WorkspaceDir: t.TempDir(),
+	})
+
+	resp, err := srv.Generate(context.Background(), &provider.GenerateRequest{
+		Configuration: []provider.AssessmentConfiguration{
+			{RequirementID: "CIS-1"},
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Success)
+	assert.Contains(t, resp.ErrorMessage, "conftest")
+}
+
+func TestGenerate_BundlePullFailure(t *testing.T) {
+	runner := &mockRunner{
+		callFn: func(name string, args []string) ([]byte, error) {
+			return []byte("auth failed"), fmt.Errorf("exit status 1")
+		},
+	}
+
+	srv := New(ServerOptions{
+		Runner:       runner,
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: t.TempDir(),
+	})
+
+	resp, err := srv.Generate(context.Background(), &provider.GenerateRequest{
+		TargetVariables: map[string]string{"opa_bundle_ref": "ghcr.io/org/bundle:v1"},
+		Configuration: []provider.AssessmentConfiguration{
+			{RequirementID: "CIS-1"},
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Success)
+	assert.Contains(t, resp.ErrorMessage, "pulling policy bundle")
+}
+
+func TestGenerate_PartialMatch(t *testing.T) {
+	workDir := t.TempDir()
+	bundleRef := "ghcr.io/org/bundle:v1"
+	cfg := config.NewConfig(workDir)
+	require.NoError(t, cfg.EnsureDirectories())
+	policyDir := cfg.PolicyDirForBundle(bundleRef)
+	require.NoError(t, os.MkdirAll(policyDir, 0750))
+
+	mappingData := `{
+		"version": "1",
+		"mappings": [
+			{"id": "ns1", "requirement_id": "CIS-1"}
+		]
+	}`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(policyDir, "complytime-mapping.json"),
+		[]byte(mappingData), 0600,
+	))
+
+	runner := &mockRunner{callFn: func(name string, args []string) ([]byte, error) {
+		return []byte("ok"), nil
+	}}
+
+	srv := New(ServerOptions{
+		Runner:       runner,
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: workDir,
+	})
+
+	resp, err := srv.Generate(context.Background(), &provider.GenerateRequest{
+		TargetVariables: map[string]string{"opa_bundle_ref": bundleRef},
+		Configuration: []provider.AssessmentConfiguration{
+			{RequirementID: "CIS-1"},
+			{RequirementID: "CIS-MISSING"},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Success)
+
+	scanCfg, err := generate.ReadScanConfig(cfg.GeneratedDirPath())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ns1"}, scanCfg.IDs)
+	assert.Equal(t, "CIS-1", scanCfg.ReverseMapping["ns1"])
+}
+
+func TestGenerate_Scan_WithMapping(t *testing.T) {
+	// Integration test: Generate with mapping → Scan with namespace filtering →
+	// verify Gemara IDs in response and --namespace flags used (not --all-namespaces).
+	workDir := t.TempDir()
+	bundleRef := "ghcr.io/org/bundle:v1"
+	cfg := config.NewConfig(workDir)
+	require.NoError(t, cfg.EnsureDirectories())
+	policyDir := cfg.PolicyDirForBundle(bundleRef)
+	require.NoError(t, os.MkdirAll(policyDir, 0750))
+
+	mappingData := `{
+		"version": "1",
+		"mappings": [
+			{"id": "kubernetes.run_as_root", "requirement_id": "CIS-K8S-5.2.6"}
+		]
+	}`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(policyDir, "complytime-mapping.json"),
+		[]byte(mappingData), 0600,
+	))
+
+	var usedNamespaceFlags bool
+	runner := &mockRunner{callFn: func(name string, args []string) ([]byte, error) {
+		if name == "conftest" && len(args) > 0 && args[0] == "pull" {
+			return []byte("ok"), nil
+		}
+		if name == "conftest" && len(args) > 0 && args[0] == "test" {
+			for _, a := range args {
+				if a == "--namespace" {
+					usedNamespaceFlags = true
+				}
+				if a == "--all-namespaces" {
+					t.Error("expected --namespace flags, got --all-namespaces")
+				}
+			}
+			return []byte(conftestHappyJSON), nil
+		}
+		return nil, fmt.Errorf("unexpected: %s", name)
+	}}
+
+	ldr := &mockLoader{
+		loadFn: func(_ provider.Target, _ string) (string, error) {
+			return t.TempDir(), nil
+		},
+	}
+
+	srv := New(ServerOptions{
+		Loader:       ldr,
+		Runner:       runner,
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: workDir,
+	})
+
+	// Step 1: Generate with mapping.
+	genResp, err := srv.Generate(context.Background(), &provider.GenerateRequest{
+		TargetVariables: map[string]string{"opa_bundle_ref": bundleRef},
+		Configuration: []provider.AssessmentConfiguration{
+			{RequirementID: "CIS-K8S-5.2.6"},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, genResp.Success)
+
+	// Step 2: Scan.
+	scanResp, err := srv.Scan(context.Background(), &provider.ScanRequest{
+		Targets: []provider.Target{
+			{
+				TargetID: "local-test",
+				Variables: map[string]string{
+					"input_path":     t.TempDir(),
+					"opa_bundle_ref": bundleRef,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, usedNamespaceFlags, "should use --namespace flags, not --all-namespaces")
+
+	// Verify Gemara IDs (not Rego-derived IDs) in response.
+	var reqIDs []string
+	for _, a := range scanResp.Assessments {
+		if a.RequirementID != "scan-status" {
+			reqIDs = append(reqIDs, a.RequirementID)
+		}
+	}
+	assert.Contains(t, reqIDs, "CIS-K8S-5.2.6")
+	assert.NotContains(t, reqIDs, "kubernetes.run_as_root")
+}
+
+func TestMergeVariables(t *testing.T) {
+	tests := []struct {
+		name     string
+		global   map[string]string
+		target   map[string]string
+		expected map[string]string
+	}{
+		{
+			"global only",
+			map[string]string{"opa_bundle_ref": "ghcr.io/bundle:v1"},
+			nil,
+			map[string]string{"opa_bundle_ref": "ghcr.io/bundle:v1"},
+		},
+		{
+			"target overrides global",
+			map[string]string{"opa_bundle_ref": "global-ref"},
+			map[string]string{"opa_bundle_ref": "target-ref"},
+			map[string]string{"opa_bundle_ref": "target-ref"},
+		},
+		{
+			"both nil",
+			nil,
+			nil,
+			map[string]string{},
+		},
+		{
+			"merge distinct keys",
+			map[string]string{"key1": "val1"},
+			map[string]string{"key2": "val2"},
+			map[string]string{"key1": "val1", "key2": "val2"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := mergeVariables(tc.global, tc.target)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+func TestGenerate_Scan_FallbackPath(t *testing.T) {
+	// Integration test: Generate without mapping → Scan → verify
+	// scan results use Rego-derived IDs (identical to pre-Generate behavior).
+	workDir := t.TempDir()
+	bundleRef := "ghcr.io/org/bundle:v1"
+
+	runner := &mockRunner{callFn: func(name string, args []string) ([]byte, error) {
+		if name == "conftest" && len(args) > 0 && args[0] == "pull" {
+			return []byte("ok"), nil
+		}
+		if name == "conftest" && len(args) > 0 && args[0] == "test" {
+			return []byte(conftestHappyJSON), nil
+		}
+		return nil, fmt.Errorf("unexpected: %s", name)
+	}}
+
+	ldr := &mockLoader{
+		loadFn: func(_ provider.Target, _ string) (string, error) {
+			return t.TempDir(), nil
+		},
+	}
+
+	srv := New(ServerOptions{
+		Loader:       ldr,
+		Runner:       runner,
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: workDir,
+	})
+
+	// Step 1: Generate (no mapping file → fallback).
+	genResp, err := srv.Generate(context.Background(), &provider.GenerateRequest{
+		TargetVariables: map[string]string{"opa_bundle_ref": bundleRef},
+		Configuration: []provider.AssessmentConfiguration{
+			{RequirementID: "CIS-1"},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, genResp.Success)
+
+	// Step 2: Scan.
+	scanResp, err := srv.Scan(context.Background(), &provider.ScanRequest{
+		Targets: []provider.Target{
+			{
+				TargetID: "local-test",
+				Variables: map[string]string{
+					"input_path":     t.TempDir(),
+					"opa_bundle_ref": bundleRef,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	// Verify Rego-derived IDs (not Gemara IDs) since no mapping.
+	var reqIDs []string
+	for _, a := range scanResp.Assessments {
+		if a.RequirementID != "scan-status" {
+			reqIDs = append(reqIDs, a.RequirementID)
+		}
+	}
+	assert.Contains(t, reqIDs, "kubernetes.run_as_root")
+	assert.Contains(t, reqIDs, "kubernetes.resource_limits")
 }
 
 // --- Scan: happy path tests ---

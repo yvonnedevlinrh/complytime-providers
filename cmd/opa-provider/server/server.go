@@ -13,6 +13,7 @@ import (
 
 	"github.com/complytime/complyctl/pkg/provider"
 	"github.com/complytime/complytime-providers/cmd/opa-provider/config"
+	"github.com/complytime/complytime-providers/cmd/opa-provider/generate"
 	"github.com/complytime/complytime-providers/cmd/opa-provider/loader"
 	"github.com/complytime/complytime-providers/cmd/opa-provider/results"
 	"github.com/complytime/complytime-providers/cmd/opa-provider/scan"
@@ -80,11 +81,98 @@ func (s *ProviderServer) Describe(
 	}, nil
 }
 
-// Generate is a stub that returns success. The Generate phase is deferred.
+// Generate reads the assessment plan's RequirementIDs, pulls the OCI policy
+// bundle, loads the optional mapping file, matches requirements to Rego
+// namespaces, and writes a scan-config.json for Scan to consume.
 func (s *ProviderServer) Generate(
-	_ context.Context, _ *provider.GenerateRequest,
+	_ context.Context, req *provider.GenerateRequest,
 ) (*provider.GenerateResponse, error) {
+	logger := hclog.Default()
+
+	if len(req.Configuration) == 0 {
+		return &provider.GenerateResponse{
+			Success:      false,
+			ErrorMessage: "no assessment configurations provided",
+		}, nil
+	}
+
+	missing, err := s.opts.ToolChecker()
+	if err != nil {
+		return nil, fmt.Errorf("checking tools: %w", err)
+	}
+	if len(missing) > 0 {
+		return &provider.GenerateResponse{
+			Success:      false,
+			ErrorMessage: toolcheck.FormatMissingToolsError(missing).Error(),
+		}, nil
+	}
+
+	cfg := config.NewConfig(s.opts.WorkspaceDir)
+	if err := cfg.EnsureDirectories(); err != nil {
+		return nil, fmt.Errorf("directory setup failed: %w", err)
+	}
+
+	vars := mergeVariables(req.GlobalVariables, req.TargetVariables)
+	bundleRef := vars[loader.VarOPABundleRef]
+	if bundleRef == "" {
+		return &provider.GenerateResponse{
+			Success:      false,
+			ErrorMessage: "opa_bundle_ref variable is required",
+		}, nil
+	}
+
+	policyDir := cfg.PolicyDirForBundle(bundleRef)
+	logger.Info("pulling policy bundle for generate", "ref", bundleRef)
+	if err := scan.PullBundle(bundleRef, policyDir, s.opts.Runner); err != nil {
+		return &provider.GenerateResponse{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("pulling policy bundle: %s", err),
+		}, nil
+	}
+
+	mapping, err := generate.LoadMapping(policyDir)
+	if err != nil {
+		logger.Warn("no complytime-mapping.json in bundle, skipping requirement filtering",
+			"error", err)
+		if writeErr := generate.WriteScanConfig(
+			cfg.GeneratedDirPath(), nil, nil, policyDir,
+		); writeErr != nil {
+			return nil, fmt.Errorf("writing scan config: %w", writeErr)
+		}
+		return &provider.GenerateResponse{Success: true}, nil
+	}
+
+	ids, reverseMap, warnings := generate.MatchRequirements(
+		req.Configuration, mapping,
+	)
+	for _, w := range warnings {
+		logger.Warn(w)
+	}
+
+	if err := generate.WriteScanConfig(
+		cfg.GeneratedDirPath(), ids, reverseMap, policyDir,
+	); err != nil {
+		return nil, fmt.Errorf("writing scan config: %w", err)
+	}
+
+	logger.Info("generate complete",
+		"matched_ids", len(ids),
+		"warnings", len(warnings))
+
 	return &provider.GenerateResponse{Success: true}, nil
+}
+
+// mergeVariables merges global and target variables. Target variables
+// override global variables with the same key.
+func mergeVariables(global, target map[string]string) map[string]string {
+	merged := make(map[string]string, len(global)+len(target))
+	for k, v := range global {
+		merged[k] = v
+	}
+	for k, v := range target {
+		merged[k] = v
+	}
+	return merged
 }
 
 // Scan evaluates configuration files against OPA policies using conftest.
@@ -111,19 +199,31 @@ func (s *ProviderServer) Scan(
 		return nil, fmt.Errorf("directory setup failed: %w", err)
 	}
 
+	// Read scan config if Generate was run.
+	scanCfg, scanCfgErr := generate.ReadScanConfig(cfg.GeneratedDirPath())
+	if scanCfgErr != nil {
+		logger.Info("no scan config found, using unfiltered evaluation")
+	}
+
 	bundleCache := map[string]string{}
 	var allResults []*results.PerTargetResult
 	var writeErrs []error
 
 	for _, target := range req.Targets {
-		targetResults, writeErr := s.processTarget(logger, target, cfg, bundleCache)
+		targetResults, writeErr := s.processTarget(
+			logger, target, cfg, bundleCache, scanCfg,
+		)
 		if writeErr != nil {
 			writeErrs = append(writeErrs, writeErr)
 		}
 		allResults = append(allResults, targetResults...)
 	}
 
-	resp := results.ToScanResponse(allResults)
+	var reverseMap map[string]string
+	if scanCfg != nil {
+		reverseMap = scanCfg.ReverseMapping
+	}
+	resp := results.ToScanResponse(allResults, reverseMap)
 	scanStatus := results.ScanStatusAssessment(allResults)
 	resp.Assessments = append(
 		[]provider.AssessmentLog{scanStatus}, resp.Assessments...,
@@ -141,6 +241,7 @@ func (s *ProviderServer) processTarget(
 	target provider.Target,
 	cfg *config.Config,
 	bundleCache map[string]string,
+	scanCfg *generate.ScanConfig,
 ) ([]*results.PerTargetResult, error) {
 	bundleRef := target.Variables[loader.VarOPABundleRef]
 	if bundleRef == "" {
@@ -189,11 +290,11 @@ func (s *ProviderServer) processTarget(
 
 	if repoURL != "" {
 		return s.processRemoteBranches(
-			logger, target, splitCSV(branchesStr), policyDir, cfg,
+			logger, target, splitCSV(branchesStr), policyDir, cfg, scanCfg,
 		)
 	}
 
-	return s.processLocalInput(logger, target, policyDir, cfg)
+	return s.processLocalInput(logger, target, policyDir, cfg, scanCfg)
 }
 
 func (s *ProviderServer) processRemoteBranches(
@@ -202,6 +303,7 @@ func (s *ProviderServer) processRemoteBranches(
 	branches []string,
 	policyDir string,
 	cfg *config.Config,
+	scanCfg *generate.ScanConfig,
 ) ([]*results.PerTargetResult, error) {
 	var targetResults []*results.PerTargetResult
 	var writeErrs []error
@@ -236,7 +338,7 @@ func (s *ProviderServer) processRemoteBranches(
 
 		result, evalErr := s.evalAndParse(
 			logger, inputPath, policyDir,
-			targets.RepoDisplayName(repoURL), branch, cfg,
+			targets.RepoDisplayName(repoURL), branch, cfg, scanCfg,
 		)
 		if result == nil && evalErr != nil {
 			logger.Warn("eval failed",
@@ -269,6 +371,7 @@ func (s *ProviderServer) processLocalInput(
 	target provider.Target,
 	policyDir string,
 	cfg *config.Config,
+	scanCfg *generate.ScanConfig,
 ) ([]*results.PerTargetResult, error) {
 	inputPath, err := s.opts.Loader.Load(target, "")
 	if err != nil {
@@ -286,7 +389,7 @@ func (s *ProviderServer) processLocalInput(
 	}
 
 	result, evalErr := s.evalAndParse(
-		logger, inputPath, policyDir, inputPath, "", cfg,
+		logger, inputPath, policyDir, inputPath, "", cfg, scanCfg,
 	)
 	if result == nil && evalErr != nil {
 		return []*results.PerTargetResult{{
@@ -306,9 +409,19 @@ func (s *ProviderServer) evalAndParse(
 	logger hclog.Logger,
 	inputPath, policyDir, displayName, branch string,
 	cfg *config.Config,
+	scanCfg *generate.ScanConfig,
 ) (*results.PerTargetResult, error) {
 	logger.Info("evaluating policies", "path", inputPath)
-	raw, err := scan.EvalPolicy(inputPath, policyDir, s.opts.Runner)
+
+	var raw []byte
+	var err error
+	if scanCfg != nil && scanCfg.IDs != nil {
+		raw, err = scan.EvalPolicyWithNamespaces(
+			inputPath, policyDir, scanCfg.IDs, s.opts.Runner,
+		)
+	} else {
+		raw, err = scan.EvalPolicy(inputPath, policyDir, s.opts.Runner)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("evaluating policies: %w", err)
 	}

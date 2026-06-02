@@ -42,6 +42,12 @@ func TestResultsDirPath(t *testing.T) {
 	assert.Equal(t, filepath.Join(dir, "opa", "results"), cfg.ResultsDirPath())
 }
 
+func TestGeneratedDirPath(t *testing.T) {
+	dir := t.TempDir()
+	cfg := NewConfig(dir)
+	assert.Equal(t, filepath.Join(dir, "opa", "generated"), cfg.GeneratedDirPath())
+}
+
 func TestEnsureDirectories(t *testing.T) {
 	dir := t.TempDir()
 	cfg := NewConfig(dir)
@@ -54,6 +60,7 @@ func TestEnsureDirectories(t *testing.T) {
 		cfg.PolicyDirPath(),
 		cfg.ReposDirPath(),
 		cfg.ResultsDirPath(),
+		cfg.GeneratedDirPath(),
 	} {
 		info, err := os.Stat(subdir)
 		require.NoError(t, err, "directory should exist: %s", subdir)

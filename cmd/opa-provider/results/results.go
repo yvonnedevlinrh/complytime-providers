@@ -164,11 +164,26 @@ func WritePerTargetResult(result *PerTargetResult, dir string) error {
 	return nil
 }
 
+// ResolveRequirementID resolves a Rego-derived requirement ID to a Gemara
+// requirement ID using the reverse mapping. If the mapping is nil or does not
+// contain the derived ID, the original ID is returned unchanged.
+func ResolveRequirementID(derivedID string, reverseMap map[string]string) string {
+	if reverseMap == nil {
+		return derivedID
+	}
+	if gemaraID, ok := reverseMap[derivedID]; ok {
+		return gemaraID
+	}
+	return derivedID
+}
+
 // ToScanResponse maps a slice of PerTargetResults to a provider.ScanResponse.
 // Findings are grouped by requirement ID into AssessmentLog entries. Each
 // target/branch scan becomes a Step within the assessment. Operational errors
 // (targets with Status "error" and no findings) are placed into resp.Errors.
-func ToScanResponse(targetResults []*PerTargetResult) *provider.ScanResponse {
+// When reverseMap is non-nil, Rego-derived requirement IDs are resolved to
+// Gemara requirement IDs before grouping.
+func ToScanResponse(targetResults []*PerTargetResult, reverseMap map[string]string) *provider.ScanResponse {
 	type reqGroup struct {
 		requirementID string
 		steps         []provider.Step
@@ -187,11 +202,12 @@ func ToScanResponse(targetResults []*PerTargetResult) *provider.ScanResponse {
 		}
 
 		for _, f := range tr.Findings {
-			g, ok := groups[f.RequirementID]
+			reqID := ResolveRequirementID(f.RequirementID, reverseMap)
+			g, ok := groups[reqID]
 			if !ok {
-				g = &reqGroup{requirementID: f.RequirementID}
-				groups[f.RequirementID] = g
-				order = append(order, f.RequirementID)
+				g = &reqGroup{requirementID: reqID}
+				groups[reqID] = g
+				order = append(order, reqID)
 			}
 			result := mapResult(f.Result, tr.Status)
 			g.steps = append(g.steps, provider.Step{

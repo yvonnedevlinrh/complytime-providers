@@ -215,7 +215,7 @@ func TestToScanResponse_Aggregation(t *testing.T) {
 		},
 	}
 
-	resp := ToScanResponse(results)
+	resp := ToScanResponse(results, nil)
 	require.Len(t, resp.Assessments, 1)
 	assert.Equal(t, "docker.network_encryption", resp.Assessments[0].RequirementID)
 	assert.Len(t, resp.Assessments[0].Steps, 2)
@@ -232,7 +232,7 @@ func TestToScanResponse_ErrorTargets(t *testing.T) {
 		},
 	}
 
-	resp := ToScanResponse(results)
+	resp := ToScanResponse(results, nil)
 	assert.Empty(t, resp.Assessments, "operational errors should not produce assessments")
 	require.Len(t, resp.Errors, 1)
 	assert.Contains(t, resp.Errors[0], "clone failed")
@@ -252,7 +252,7 @@ func TestToScanResponse_ErrorTargetWithFindings(t *testing.T) {
 		},
 	}
 
-	resp := ToScanResponse(results)
+	resp := ToScanResponse(results, nil)
 	require.Len(t, resp.Assessments, 1)
 	assert.Equal(t, "docker.network_encryption", resp.Assessments[0].RequirementID)
 	require.Len(t, resp.Assessments[0].Steps, 1)
@@ -275,8 +275,8 @@ func TestToScanResponse_DeterministicOrder(t *testing.T) {
 		},
 	}
 
-	resp1 := ToScanResponse(results)
-	resp2 := ToScanResponse(results)
+	resp1 := ToScanResponse(results, nil)
+	resp2 := ToScanResponse(results, nil)
 	require.Equal(t, len(resp1.Assessments), len(resp2.Assessments))
 	for i := range resp1.Assessments {
 		assert.Equal(t, resp1.Assessments[i].RequirementID, resp2.Assessments[i].RequirementID)
@@ -285,7 +285,7 @@ func TestToScanResponse_DeterministicOrder(t *testing.T) {
 }
 
 func TestToScanResponse_Empty(t *testing.T) {
-	resp := ToScanResponse(nil)
+	resp := ToScanResponse(nil, nil)
 	assert.Empty(t, resp.Assessments)
 	assert.Empty(t, resp.Errors)
 }
@@ -388,4 +388,45 @@ func TestWritePerTargetResult(t *testing.T) {
 	info, err := os.Stat(filepath.Join(dir, files[0].Name()))
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+}
+
+func TestResolveRequirementID_MappingHit(t *testing.T) {
+	reverseMap := map[string]string{
+		"kubernetes.run_as_root": "CIS-K8S-5.2.6",
+	}
+	result := ResolveRequirementID("kubernetes.run_as_root", reverseMap)
+	assert.Equal(t, "CIS-K8S-5.2.6", result)
+}
+
+func TestResolveRequirementID_MappingMiss(t *testing.T) {
+	reverseMap := map[string]string{
+		"kubernetes.run_as_root": "CIS-K8S-5.2.6",
+	}
+	result := ResolveRequirementID("docker.network_encryption", reverseMap)
+	assert.Equal(t, "docker.network_encryption", result)
+}
+
+func TestResolveRequirementID_NilMapping(t *testing.T) {
+	result := ResolveRequirementID("kubernetes.run_as_root", nil)
+	assert.Equal(t, "kubernetes.run_as_root", result)
+}
+
+func TestToScanResponse_WithReverseMapping(t *testing.T) {
+	results := []*PerTargetResult{
+		{
+			Target: "target1",
+			Branch: "main",
+			Status: "scanned",
+			Findings: []Finding{
+				{RequirementID: "kubernetes.run_as_root", Result: "fail", Reason: "violation"},
+			},
+		},
+	}
+	reverseMap := map[string]string{
+		"kubernetes.run_as_root": "CIS-K8S-5.2.6",
+	}
+
+	resp := ToScanResponse(results, reverseMap)
+	require.Len(t, resp.Assessments, 1)
+	assert.Equal(t, "CIS-K8S-5.2.6", resp.Assessments[0].RequirementID)
 }

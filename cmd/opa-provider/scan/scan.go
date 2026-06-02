@@ -67,3 +67,39 @@ func constructConftestTestCommand(inputPath, policyDir string) (string, []string
 		"--no-fail",
 	}
 }
+
+// EvalPolicyWithNamespaces evaluates configuration files against OPA policies
+// using conftest, restricted to the specified Rego namespaces.
+func EvalPolicyWithNamespaces(
+	inputPath, policyDir string,
+	namespaces []string,
+	runner CommandRunner,
+) ([]byte, error) {
+	name, args := constructConftestTestCommandWithNamespaces(
+		inputPath, policyDir, namespaces,
+	)
+	output, err := runner.Run(name, args...)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"evaluating policy on %q: %w (output: %s)",
+			inputPath, err, string(output),
+		)
+	}
+	return output, nil
+}
+
+func constructConftestTestCommandWithNamespaces(
+	inputPath, policyDir string,
+	namespaces []string,
+) (string, []string) {
+	args := []string{
+		"test", inputPath,
+		"--policy", policyDir,
+		"--output", "json",
+		"--no-fail",
+	}
+	for _, ns := range namespaces {
+		args = append(args, "--namespace", ns)
+	}
+	return "conftest", args
+}
