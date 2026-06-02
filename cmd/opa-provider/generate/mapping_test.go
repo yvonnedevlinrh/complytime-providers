@@ -3,6 +3,7 @@
 package generate
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -35,7 +36,20 @@ func TestLoadMapping_MissingFile(t *testing.T) {
 	dir := t.TempDir()
 	_, err := LoadMapping(dir)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "reading mapping file")
+	assert.True(t, errors.Is(err, ErrMappingNotFound),
+		"missing file error should wrap ErrMappingNotFound")
+	assert.Contains(t, err.Error(), MappingFileName)
+}
+
+func TestLoadMapping_MalformedFileIsNotMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, MappingFileName), []byte("{invalid"), 0600))
+
+	_, err := LoadMapping(dir)
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, ErrMappingNotFound),
+		"malformed file should not be reported as missing")
+	assert.Contains(t, err.Error(), "parsing mapping file")
 }
 
 func TestLoadMapping_EmptyFile(t *testing.T) {

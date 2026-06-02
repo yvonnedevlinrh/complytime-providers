@@ -4,6 +4,7 @@ package generate
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,10 @@ import (
 
 	"github.com/complytime/complyctl/pkg/provider"
 )
+
+// ErrMappingNotFound indicates that the complytime-mapping.json file
+// does not exist in the policy bundle directory.
+var ErrMappingNotFound = errors.New("mapping file not found")
 
 const (
 	// MappingFileName is the name of the mapping file inside an OCI policy bundle.
@@ -38,6 +43,9 @@ func LoadMapping(bundleDir string) (*MappingFile, error) {
 	path := filepath.Join(bundleDir, MappingFileName)
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w: %s not found in %s", ErrMappingNotFound, MappingFileName, bundleDir)
+		}
 		return nil, fmt.Errorf("reading mapping file: %w", err)
 	}
 

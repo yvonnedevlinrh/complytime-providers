@@ -152,6 +152,19 @@ func remoteTarget(bundleRef, url string) provider.Target {
 	}
 }
 
+// writeScanConfig writes a minimal scan config for tests that need Scan to
+// work without a prior Generate call.
+func writeScanConfig(t *testing.T, workDir string) {
+	t.Helper()
+	cfg := config.NewConfig(workDir)
+	require.NoError(t, generate.WriteScanConfig(
+		cfg.GeneratedDirPath(),
+		[]string{"main"},
+		map[string]string{"main": "test-req"},
+		t.TempDir(),
+	))
+}
+
 // --- Constructor tests ---
 
 func TestNew_ReturnsProviderServer(t *testing.T) {
@@ -289,7 +302,7 @@ func TestGenerate_WithoutMapping(t *testing.T) {
 	require.NoError(t, cfg.EnsureDirectories())
 	policyDir := cfg.PolicyDirForBundle(bundleRef)
 	require.NoError(t, os.MkdirAll(policyDir, 0750))
-	// No mapping file -- fallback path.
+	// No mapping file -- should return error, not fallback.
 
 	runner := &mockRunner{callFn: func(name string, args []string) ([]byte, error) {
 		return []byte("ok"), nil
@@ -308,13 +321,12 @@ func TestGenerate_WithoutMapping(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	assert.True(t, resp.Success)
+	assert.False(t, resp.Success)
+	assert.Contains(t, resp.ErrorMessage, generate.MappingFileName)
 
-	// Verify scan-config.json was written with nil IDs.
-	scanCfg, err := generate.ReadScanConfig(cfg.GeneratedDirPath())
-	require.NoError(t, err)
-	assert.Nil(t, scanCfg.IDs)
-	assert.Nil(t, scanCfg.ReverseMapping)
+	// Verify no scan-config.json was written.
+	_, readErr := generate.ReadScanConfig(cfg.GeneratedDirPath())
+	assert.Error(t, readErr, "no scan config should be written when mapping is missing")
 }
 
 func TestGenerate_MissingBundleRef(t *testing.T) {
@@ -374,6 +386,41 @@ func TestGenerate_BundlePullFailure(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, resp.Success)
 	assert.Contains(t, resp.ErrorMessage, "pulling policy bundle")
+}
+
+func TestGenerate_MalformedMapping(t *testing.T) {
+	workDir := t.TempDir()
+	bundleRef := "ghcr.io/org/bundle:v1"
+	cfg := config.NewConfig(workDir)
+	require.NoError(t, cfg.EnsureDirectories())
+	policyDir := cfg.PolicyDirForBundle(bundleRef)
+	require.NoError(t, os.MkdirAll(policyDir, 0750))
+
+	// Write an invalid mapping file (malformed JSON).
+	require.NoError(t, os.WriteFile(
+		filepath.Join(policyDir, generate.MappingFileName),
+		[]byte("{invalid json"), 0600,
+	))
+
+	runner := &mockRunner{callFn: func(name string, args []string) ([]byte, error) {
+		return []byte("ok"), nil
+	}}
+
+	srv := New(ServerOptions{
+		Runner:       runner,
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: workDir,
+	})
+
+	resp, err := srv.Generate(context.Background(), &provider.GenerateRequest{
+		TargetVariables: map[string]string{"opa_bundle_ref": bundleRef},
+		Configuration: []provider.AssessmentConfiguration{
+			{RequirementID: "CIS-1"},
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Success)
+	assert.Contains(t, resp.ErrorMessage, "invalid mapping file")
 }
 
 func TestGenerate_PartialMatch(t *testing.T) {
@@ -550,9 +597,9 @@ func TestMergeVariables(t *testing.T) {
 	}
 }
 
-func TestGenerate_Scan_FallbackPath(t *testing.T) {
-	// Integration test: Generate without mapping → Scan → verify
-	// scan results use Rego-derived IDs (identical to pre-Generate behavior).
+func TestGenerate_Scan_MissingMappingReturnsError(t *testing.T) {
+	// Integration test: Generate without mapping → error response.
+	// Scan should not be reached because Generate fails.
 	workDir := t.TempDir()
 	bundleRef := "ghcr.io/org/bundle:v1"
 
@@ -560,26 +607,15 @@ func TestGenerate_Scan_FallbackPath(t *testing.T) {
 		if name == "conftest" && len(args) > 0 && args[0] == "pull" {
 			return []byte("ok"), nil
 		}
-		if name == "conftest" && len(args) > 0 && args[0] == "test" {
-			return []byte(conftestHappyJSON), nil
-		}
 		return nil, fmt.Errorf("unexpected: %s", name)
 	}}
 
-	ldr := &mockLoader{
-		loadFn: func(_ provider.Target, _ string) (string, error) {
-			return t.TempDir(), nil
-		},
-	}
-
 	srv := New(ServerOptions{
-		Loader:       ldr,
 		Runner:       runner,
 		ToolChecker:  func() ([]string, error) { return nil, nil },
 		WorkspaceDir: workDir,
 	})
 
-	// Step 1: Generate (no mapping file → fallback).
 	genResp, err := srv.Generate(context.Background(), &provider.GenerateRequest{
 		TargetVariables: map[string]string{"opa_bundle_ref": bundleRef},
 		Configuration: []provider.AssessmentConfiguration{
@@ -587,31 +623,8 @@ func TestGenerate_Scan_FallbackPath(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	assert.True(t, genResp.Success)
-
-	// Step 2: Scan.
-	scanResp, err := srv.Scan(context.Background(), &provider.ScanRequest{
-		Targets: []provider.Target{
-			{
-				TargetID: "local-test",
-				Variables: map[string]string{
-					"input_path":     t.TempDir(),
-					"opa_bundle_ref": bundleRef,
-				},
-			},
-		},
-	})
-	require.NoError(t, err)
-
-	// Verify Rego-derived IDs (not Gemara IDs) since no mapping.
-	var reqIDs []string
-	for _, a := range scanResp.Assessments {
-		if a.RequirementID != "scan-status" {
-			reqIDs = append(reqIDs, a.RequirementID)
-		}
-	}
-	assert.Contains(t, reqIDs, "kubernetes.run_as_root")
-	assert.Contains(t, reqIDs, "kubernetes.resource_limits")
+	assert.False(t, genResp.Success, "Generate should fail when mapping file is missing")
+	assert.Contains(t, genResp.ErrorMessage, generate.MappingFileName)
 }
 
 // --- Scan: happy path tests ---
@@ -655,6 +668,9 @@ func TestScan_RemoteURL_HappyPath(t *testing.T) {
 }
 
 func TestScan_RemoteURL_WithBranches(t *testing.T) {
+	workDir := t.TempDir()
+	writeScanConfig(t, workDir)
+
 	conftestTestCount := 0
 	runner := &mockRunner{
 		callFn: func(name string, args []string) ([]byte, error) {
@@ -676,7 +692,12 @@ func TestScan_RemoteURL_WithBranches(t *testing.T) {
 		},
 	}
 
-	srv := newTestServer(t, runner, ldr)
+	srv := New(ServerOptions{
+		Loader:       ldr,
+		Runner:       runner,
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: workDir,
+	})
 	target := provider.Target{
 		TargetID: "test",
 		Variables: map[string]string{
@@ -694,6 +715,9 @@ func TestScan_RemoteURL_WithBranches(t *testing.T) {
 }
 
 func TestScan_RemoteURL_WithScanPath(t *testing.T) {
+	workDir := t.TempDir()
+	writeScanConfig(t, workDir)
+
 	scanSubPath := filepath.Join(t.TempDir(), "configs", "k8s")
 	var conftestTestPath string
 	runner := &mockRunner{
@@ -716,7 +740,12 @@ func TestScan_RemoteURL_WithScanPath(t *testing.T) {
 		},
 	}
 
-	srv := newTestServer(t, runner, ldr)
+	srv := New(ServerOptions{
+		Loader:       ldr,
+		Runner:       runner,
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: workDir,
+	})
 	target := provider.Target{
 		TargetID: "test",
 		Variables: map[string]string{
@@ -789,6 +818,32 @@ func TestScan_NoTargets(t *testing.T) {
 	_, err := srv.Scan(context.Background(), req)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "at least one target")
+}
+
+func TestScan_WithoutPriorGenerate_ReturnsError(t *testing.T) {
+	runner := conftestRunner(conftestHappyJSON)
+	ldr := &mockLoader{
+		loadFn: func(_ provider.Target, _ string) (string, error) {
+			return t.TempDir(), nil
+		},
+	}
+
+	// No writeScanConfig -- Scan runs without a prior Generate call.
+	srv := newTestServer(t, runner, ldr)
+	req := makeScanRequest(t, []provider.Target{
+		localTarget(t, t.TempDir(), "ghcr.io/org/bundle:dev"),
+	})
+	resp, err := srv.Scan(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+
+	// The scan-status assessment should report failure for the target.
+	require.NotEmpty(t, resp.Assessments)
+	assert.Equal(t, "scan-status", resp.Assessments[0].RequirementID)
+	require.NotEmpty(t, resp.Assessments[0].Steps)
+	assert.Contains(t, resp.Assessments[0].Steps[0].Message,
+		generate.MappingFileName,
+		"error should mention the mapping file name")
 }
 
 func TestScan_ToolCheckFailure(t *testing.T) {
