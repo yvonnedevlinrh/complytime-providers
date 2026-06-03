@@ -346,6 +346,98 @@ func TestGenerate_MissingBundleRef(t *testing.T) {
 	assert.Contains(t, resp.ErrorMessage, "opa_bundle_ref")
 }
 
+func TestGenerate_WithComplypackContentPath(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.NewConfig(workDir)
+	require.NoError(t, cfg.EnsureDirectories())
+
+	// Create a complypack content directory with Rego + mapping.
+	complypackDir := filepath.Join(t.TempDir(), "complypack-content")
+	require.NoError(t, os.MkdirAll(complypackDir, 0750))
+
+	mappingContent := `{
+		"version": "1.0.0",
+		"mappings": [
+			{"id": "kubernetes.check_one", "requirement_id": "REQ-1"}
+		]
+	}`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(complypackDir, generate.MappingFileName),
+		[]byte(mappingContent), 0600,
+	))
+
+	srv := New(ServerOptions{
+		Runner:       &mockRunner{},
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: workDir,
+	})
+
+	// Generate with ComplypackContentPath — should NOT require opa_bundle_ref
+	// and should NOT call conftest pull.
+	resp, err := srv.Generate(context.Background(), &provider.GenerateRequest{
+		ComplypackContentPath: complypackDir,
+		Configuration: []provider.AssessmentConfiguration{
+			{RequirementID: "REQ-1"},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Success, "generate should succeed with complypack path: %s", resp.ErrorMessage)
+
+	// Verify scan-config.json was written with the complypack dir as BundleDir.
+	scanCfg, err := generate.ReadScanConfig(cfg.GeneratedDirPath())
+	require.NoError(t, err)
+	assert.Equal(t, complypackDir, scanCfg.BundleDir,
+		"scan config BundleDir should point to the complypack content path")
+	assert.Contains(t, scanCfg.IDs, "kubernetes.check_one")
+	assert.Equal(t, "REQ-1", scanCfg.ReverseMapping["kubernetes.check_one"])
+}
+
+func TestGenerate_ComplypackPreferredOverBundleRef(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.NewConfig(workDir)
+	require.NoError(t, cfg.EnsureDirectories())
+
+	complypackDir := filepath.Join(t.TempDir(), "complypack-content")
+	require.NoError(t, os.MkdirAll(complypackDir, 0750))
+
+	mappingContent := `{
+		"version": "1.0.0",
+		"mappings": [
+			{"id": "kubernetes.check_one", "requirement_id": "REQ-1"}
+		]
+	}`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(complypackDir, generate.MappingFileName),
+		[]byte(mappingContent), 0600,
+	))
+
+	pullCalled := false
+	runner := &mockRunner{callFn: func(name string, args []string) ([]byte, error) {
+		if name == "conftest" && len(args) > 0 && args[0] == "pull" {
+			pullCalled = true
+		}
+		return []byte("ok"), nil
+	}}
+
+	srv := New(ServerOptions{
+		Runner:       runner,
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: workDir,
+	})
+
+	// Provide BOTH complypack path and opa_bundle_ref — complypack should win.
+	resp, err := srv.Generate(context.Background(), &provider.GenerateRequest{
+		ComplypackContentPath: complypackDir,
+		TargetVariables:       map[string]string{"opa_bundle_ref": "ghcr.io/org/bundle:v1"},
+		Configuration: []provider.AssessmentConfiguration{
+			{RequirementID: "REQ-1"},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Success)
+	assert.False(t, pullCalled, "conftest pull should NOT be called when complypack path is provided")
+}
+
 func TestGenerate_ToolCheckFailure(t *testing.T) {
 	srv := New(ServerOptions{
 		ToolChecker: func() ([]string, error) {

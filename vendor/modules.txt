@@ -32,7 +32,7 @@ github.com/cespare/xxhash/v2
 ## explicit; go 1.25.8
 github.com/complytime/complybeacon/proofwatch
 github.com/complytime/complybeacon/proofwatch/internal/metrics
-# github.com/complytime/complyctl v1.0.0-alpha.0.0.20260526092431-fe09f83bd16f
+# github.com/complytime/complyctl v1.0.0-alpha.0.0.20260603142430-4e8182955d8f
 ## explicit; go 1.25.0
 github.com/complytime/complyctl/api/plugin
 github.com/complytime/complyctl/internal/complytime
