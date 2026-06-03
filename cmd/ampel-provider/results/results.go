@@ -191,7 +191,8 @@ func WritePerRepoResult(result *PerRepoResult, dir string) error {
 // ToScanResponse maps a slice of PerRepoResults to a provider.ScanResponse.
 // Findings are grouped by requirement ID (derived from TenetID) into
 // AssessmentLog entries. Each repository/branch scan becomes a Step within
-// the assessment.
+// the assessment. Operational errors (repos with Status "error" and no
+// findings) are placed into resp.Errors instead of synthetic assessments.
 func ToScanResponse(repoResults []*PerRepoResult) *provider.ScanResponse {
 	type reqGroup struct {
 		requirementID string
@@ -202,6 +203,7 @@ func ToScanResponse(repoResults []*PerRepoResult) *provider.ScanResponse {
 
 	groups := make(map[string]*reqGroup)
 	var order []string // track insertion order for deterministic output
+	var opErrors []string
 
 	for _, rr := range repoResults {
 		repoName := targets.RepoDisplayName(rr.Repository)
@@ -230,21 +232,10 @@ func ToScanResponse(repoResults []*PerRepoResult) *provider.ScanResponse {
 			}
 		}
 
-		// For error status with no findings, add an error step
+		// Operational errors with no findings go to resp.Errors
 		if rr.Status == "error" && len(rr.Findings) == 0 {
-			const errorReqID = "scan-error"
-			g, ok := groups[errorReqID]
-			if !ok {
-				g = &reqGroup{requirementID: errorReqID}
-				groups[errorReqID] = g
-				order = append(order, errorReqID)
-			}
-			g.steps = append(g.steps, provider.Step{
-				Name:    stepName,
-				Result:  provider.ResultError,
-				Message: rr.Error,
-			})
-			g.totalCount++
+			opErrors = append(opErrors,
+				fmt.Sprintf("%s: %s", stepName, rr.Error))
 		}
 	}
 
@@ -259,7 +250,7 @@ func ToScanResponse(repoResults []*PerRepoResult) *provider.ScanResponse {
 		})
 	}
 
-	return &provider.ScanResponse{Assessments: assessments}
+	return &provider.ScanResponse{Assessments: assessments, Errors: opErrors}
 }
 
 func mapResult(findingResult, repoStatus string) provider.Result {
