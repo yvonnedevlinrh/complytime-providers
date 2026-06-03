@@ -246,6 +246,7 @@ func TestToScanResponse(t *testing.T) {
 	resp := ToScanResponse(repoResults)
 	// Same requirement ID → grouped into one assessment with two steps
 	require.Len(t, resp.Assessments, 1)
+	require.Empty(t, resp.Errors)
 	assessment := resp.Assessments[0]
 	require.Equal(t, "BP-1.01", assessment.RequirementID)
 	require.Len(t, assessment.Steps, 2)
@@ -289,6 +290,7 @@ func TestToScanResponse_MultipleChecks(t *testing.T) {
 	resp := ToScanResponse(repoResults)
 	// Two distinct requirement IDs → two assessments
 	require.Len(t, resp.Assessments, 2)
+	require.Empty(t, resp.Errors)
 
 	// Each assessment should have 2 steps (one per repo)
 	for _, a := range resp.Assessments {
@@ -307,9 +309,34 @@ func TestToScanResponse_ErrorRepo(t *testing.T) {
 	}
 
 	resp := ToScanResponse(repoResults)
+	require.Empty(t, resp.Assessments,
+		"operational errors should not produce assessments")
+	require.Len(t, resp.Errors, 1)
+	require.Contains(t, resp.Errors[0], "connection refused")
+	require.Contains(t, resp.Errors[0], "myorg/repo1@main")
+}
+
+func TestToScanResponse_ErrorRepoWithFindings(t *testing.T) {
+	repoResults := []*PerRepoResult{
+		{
+			Repository: "https://github.com/myorg/repo1",
+			Branch:     "main",
+			Status:     "error",
+			Error:      "partial failure",
+			Findings: []Finding{
+				{TenetID: "check-BP-1.01", Title: "Check 1", Result: "fail", Reason: "violation"},
+			},
+		},
+	}
+
+	resp := ToScanResponse(repoResults)
 	require.Len(t, resp.Assessments, 1)
-	require.Equal(t, provider.ResultError, resp.Assessments[0].Steps[0].Result)
-	require.Equal(t, "connection refused", resp.Assessments[0].Steps[0].Message)
+	require.Equal(t, "BP-1.01", resp.Assessments[0].RequirementID)
+	require.Len(t, resp.Assessments[0].Steps, 1)
+	require.Equal(t, provider.ResultError, resp.Assessments[0].Steps[0].Result,
+		"findings on error repos should map to ResultError via mapResult")
+	require.Empty(t, resp.Errors,
+		"error repos with findings should not duplicate into resp.Errors")
 }
 
 func TestMapResult(t *testing.T) {

@@ -422,8 +422,10 @@ func TestScan_ScanError_ContinuesScanning(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	// Should have 2 assessments: one error, one pass
-	require.Len(t, scanResp.Assessments, 2)
+	// The successful target produces 1 assessment; the error target goes to resp.Errors
+	require.Len(t, scanResp.Assessments, 1)
+	require.Len(t, scanResp.Errors, 1)
+	require.Contains(t, scanResp.Errors[0], "myorg/repo1@main")
 }
 
 type mockCallCountRunner struct {
