@@ -3,6 +3,9 @@
 package server
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"os"
@@ -344,6 +347,360 @@ func TestGenerate_MissingBundleRef(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, resp.Success)
 	assert.Contains(t, resp.ErrorMessage, "opa_bundle_ref")
+}
+
+func TestGenerate_WithComplypackContentPath(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.NewConfig(workDir)
+	require.NoError(t, cfg.EnsureDirectories())
+
+	// Create a complypack content directory with Rego + mapping.
+	complypackDir := filepath.Join(t.TempDir(), "complypack-content")
+	require.NoError(t, os.MkdirAll(complypackDir, 0750))
+
+	mappingContent := `{
+		"version": "1.0.0",
+		"mappings": [
+			{"id": "kubernetes.check_one", "requirement_id": "REQ-1"}
+		]
+	}`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(complypackDir, generate.MappingFileName),
+		[]byte(mappingContent), 0600,
+	))
+
+	srv := New(ServerOptions{
+		Runner:       &mockRunner{},
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: workDir,
+	})
+
+	// Generate with ComplypackContentPath — should NOT require opa_bundle_ref
+	// and should NOT call conftest pull.
+	resp, err := srv.Generate(context.Background(), &provider.GenerateRequest{
+		ComplypackContentPath: complypackDir,
+		Configuration: []provider.AssessmentConfiguration{
+			{RequirementID: "REQ-1"},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Success, "generate should succeed with complypack path: %s", resp.ErrorMessage)
+
+	// Verify scan-config.json was written with the complypack dir as BundleDir.
+	scanCfg, err := generate.ReadScanConfig(cfg.GeneratedDirPath())
+	require.NoError(t, err)
+	assert.Equal(t, complypackDir, scanCfg.BundleDir,
+		"scan config BundleDir should point to the complypack content path")
+	assert.Contains(t, scanCfg.IDs, "kubernetes.check_one")
+	assert.Equal(t, "REQ-1", scanCfg.ReverseMapping["kubernetes.check_one"])
+}
+
+func TestGenerate_ComplypackPreferredOverBundleRef(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.NewConfig(workDir)
+	require.NoError(t, cfg.EnsureDirectories())
+
+	complypackDir := filepath.Join(t.TempDir(), "complypack-content")
+	require.NoError(t, os.MkdirAll(complypackDir, 0750))
+
+	mappingContent := `{
+		"version": "1.0.0",
+		"mappings": [
+			{"id": "kubernetes.check_one", "requirement_id": "REQ-1"}
+		]
+	}`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(complypackDir, generate.MappingFileName),
+		[]byte(mappingContent), 0600,
+	))
+
+	pullCalled := false
+	runner := &mockRunner{callFn: func(name string, args []string) ([]byte, error) {
+		if name == "conftest" && len(args) > 0 && args[0] == "pull" {
+			pullCalled = true
+		}
+		return []byte("ok"), nil
+	}}
+
+	srv := New(ServerOptions{
+		Runner:       runner,
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: workDir,
+	})
+
+	// Provide BOTH complypack path and opa_bundle_ref — complypack should win.
+	resp, err := srv.Generate(context.Background(), &provider.GenerateRequest{
+		ComplypackContentPath: complypackDir,
+		TargetVariables:       map[string]string{"opa_bundle_ref": "ghcr.io/org/bundle:v1"},
+		Configuration: []provider.AssessmentConfiguration{
+			{RequirementID: "REQ-1"},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Success)
+	assert.False(t, pullCalled, "conftest pull should NOT be called when complypack path is provided")
+}
+
+// buildTarGz creates a tar.gz archive containing the given files and returns
+// the archive bytes. Each entry in files maps a relative path to its content.
+func buildTarGz(t *testing.T, files map[string][]byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	for name, content := range files {
+		hdr := &tar.Header{
+			Name: name,
+			Mode: 0600,
+			Size: int64(len(content)),
+		}
+		require.NoError(t, tw.WriteHeader(hdr))
+		_, err := tw.Write(content)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, tw.Close())
+	require.NoError(t, gw.Close())
+	return buf.Bytes()
+}
+
+func TestGenerate_WithComplypackContentPath_TarGz(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.NewConfig(workDir)
+	require.NoError(t, cfg.EnsureDirectories())
+
+	// Build a tar.gz archive containing the mapping file.
+	mappingContent := `{
+		"version": "1.0.0",
+		"mappings": [
+			{"id": "kubernetes.check_one", "requirement_id": "REQ-1"}
+		]
+	}`
+	archiveBytes := buildTarGz(t, map[string][]byte{
+		generate.MappingFileName: []byte(mappingContent),
+	})
+
+	// Write the archive to a file, mimicking complyctl's cache layout:
+	// ~/.complytime/complypacks/opa/1.0.0/content.tar.gz
+	complypackCacheDir := filepath.Join(t.TempDir(), "opa", "1.0.0")
+	require.NoError(t, os.MkdirAll(complypackCacheDir, 0750))
+	archivePath := filepath.Join(complypackCacheDir, "content.tar.gz")
+	require.NoError(t, os.WriteFile(archivePath, archiveBytes, 0600))
+
+	srv := New(ServerOptions{
+		Runner:       &mockRunner{},
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: workDir,
+	})
+
+	// Generate with a tar.gz ComplypackContentPath — should extract and
+	// read the mapping file from the extracted directory.
+	resp, err := srv.Generate(context.Background(), &provider.GenerateRequest{
+		ComplypackContentPath: archivePath,
+		Configuration: []provider.AssessmentConfiguration{
+			{RequirementID: "REQ-1"},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Success,
+		"generate should succeed with tar.gz complypack path: %s",
+		resp.ErrorMessage)
+
+	// Verify scan-config.json was written with the extracted directory
+	// (not the tar.gz path) as BundleDir.
+	scanCfg, err := generate.ReadScanConfig(cfg.GeneratedDirPath())
+	require.NoError(t, err)
+	assert.NotEqual(t, archivePath, scanCfg.BundleDir,
+		"BundleDir should be the extracted directory, not the archive")
+	assert.DirExists(t, scanCfg.BundleDir,
+		"BundleDir should be an existing directory")
+	assert.Contains(t, scanCfg.IDs, "kubernetes.check_one")
+	assert.Equal(t, "REQ-1",
+		scanCfg.ReverseMapping["kubernetes.check_one"])
+
+	// Verify the mapping file exists in the extracted directory.
+	mappingPath := filepath.Join(
+		scanCfg.BundleDir, generate.MappingFileName,
+	)
+	assert.FileExists(t, mappingPath)
+}
+
+func TestGenerate_WithComplypackContentPath_TarGz_Idempotent(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.NewConfig(workDir)
+	require.NoError(t, cfg.EnsureDirectories())
+
+	mappingContent := `{
+		"version": "1.0.0",
+		"mappings": [
+			{"id": "kubernetes.check_one", "requirement_id": "REQ-1"}
+		]
+	}`
+	archiveBytes := buildTarGz(t, map[string][]byte{
+		generate.MappingFileName: []byte(mappingContent),
+	})
+
+	complypackCacheDir := filepath.Join(t.TempDir(), "opa", "1.0.0")
+	require.NoError(t, os.MkdirAll(complypackCacheDir, 0750))
+	archivePath := filepath.Join(complypackCacheDir, "content.tar.gz")
+	require.NoError(t, os.WriteFile(archivePath, archiveBytes, 0600))
+
+	srv := New(ServerOptions{
+		Runner:       &mockRunner{},
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: workDir,
+	})
+
+	req := &provider.GenerateRequest{
+		ComplypackContentPath: archivePath,
+		Configuration: []provider.AssessmentConfiguration{
+			{RequirementID: "REQ-1"},
+		},
+	}
+
+	// Run Generate twice — second run should reuse the extracted dir.
+	resp1, err := srv.Generate(context.Background(), req)
+	require.NoError(t, err)
+	assert.True(t, resp1.Success)
+
+	resp2, err := srv.Generate(context.Background(), req)
+	require.NoError(t, err)
+	assert.True(t, resp2.Success)
+}
+
+func TestResolveComplypackPath_Directory(t *testing.T) {
+	dir := t.TempDir()
+	result, err := resolveComplypackPath(dir)
+	require.NoError(t, err)
+	assert.Equal(t, dir, result, "directory path should be returned as-is")
+}
+
+func TestResolveComplypackPath_NonExistent(t *testing.T) {
+	_, err := resolveComplypackPath("/nonexistent/path")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "stat")
+}
+
+func TestExtractTarGz_PathTraversal(t *testing.T) {
+	// Build a tar.gz with a path-traversal entry.
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	hdr := &tar.Header{
+		Name: "../../../etc/passwd",
+		Mode: 0600,
+		Size: 5,
+	}
+	require.NoError(t, tw.WriteHeader(hdr))
+	_, err := tw.Write([]byte("owned"))
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+	require.NoError(t, gw.Close())
+
+	archivePath := filepath.Join(t.TempDir(), "evil.tar.gz")
+	require.NoError(t, os.WriteFile(archivePath, buf.Bytes(), 0600))
+
+	dst := filepath.Join(t.TempDir(), "output")
+	err = extractTarGz(archivePath, dst)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "path traversal")
+}
+
+func TestExtractTarGz_AbsolutePath(t *testing.T) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	hdr := &tar.Header{
+		Name:     "/etc/passwd",
+		Mode:     0600,
+		Size:     5,
+		Typeflag: tar.TypeReg,
+	}
+	require.NoError(t, tw.WriteHeader(hdr))
+	_, err := tw.Write([]byte("owned"))
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+	require.NoError(t, gw.Close())
+
+	archivePath := filepath.Join(t.TempDir(), "abs.tar.gz")
+	require.NoError(t, os.WriteFile(archivePath, buf.Bytes(), 0600))
+
+	dst := filepath.Join(t.TempDir(), "output")
+	err = extractTarGz(archivePath, dst)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "path traversal")
+}
+
+func TestExtractTarGz_SymlinkRejected(t *testing.T) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	hdr := &tar.Header{
+		Name:     "evil-link",
+		Typeflag: tar.TypeSymlink,
+		Linkname: "/etc/passwd",
+	}
+	require.NoError(t, tw.WriteHeader(hdr))
+	require.NoError(t, tw.Close())
+	require.NoError(t, gw.Close())
+
+	archivePath := filepath.Join(t.TempDir(), "symlink.tar.gz")
+	require.NoError(t, os.WriteFile(archivePath, buf.Bytes(), 0600))
+
+	dst := filepath.Join(t.TempDir(), "output")
+	err := extractTarGz(archivePath, dst)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "symlinks and hard links")
+}
+
+func TestExtractTarGz_DirectoryEntries(t *testing.T) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	// Add a directory entry.
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "subdir/",
+		Typeflag: tar.TypeDir,
+		Mode:     0750,
+	}))
+	// Add a file inside that directory.
+	content := []byte(`{"version": "1"}`)
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "subdir/data.json",
+		Typeflag: tar.TypeReg,
+		Mode:     0600,
+		Size:     int64(len(content)),
+	}))
+	_, err := tw.Write(content)
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+	require.NoError(t, gw.Close())
+
+	archivePath := filepath.Join(t.TempDir(), "dirs.tar.gz")
+	require.NoError(t, os.WriteFile(archivePath, buf.Bytes(), 0600))
+
+	dst := filepath.Join(t.TempDir(), "output")
+	require.NoError(t, extractTarGz(archivePath, dst))
+
+	assert.DirExists(t, filepath.Join(dst, "subdir"))
+	assert.FileExists(t, filepath.Join(dst, "subdir", "data.json"))
+
+	data, err := os.ReadFile(filepath.Join(dst, "subdir", "data.json"))
+	require.NoError(t, err)
+	assert.Equal(t, `{"version": "1"}`, string(data))
+}
+
+func TestResolveComplypackPath_InvalidArchive(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "not-a-tarball.txt")
+	require.NoError(t, os.WriteFile(f, []byte("hello"), 0600))
+	_, err := resolveComplypackPath(f)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "extracting complypack archive")
 }
 
 func TestGenerate_ToolCheckFailure(t *testing.T) {

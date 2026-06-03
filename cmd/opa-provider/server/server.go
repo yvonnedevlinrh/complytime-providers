@@ -3,9 +3,14 @@
 package server
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -81,10 +86,12 @@ func (s *ProviderServer) Describe(
 	}, nil
 }
 
-// Generate reads the assessment plan's RequirementIDs, pulls the OCI policy
-// bundle, loads the required mapping file, matches requirements to Rego
-// namespaces, and writes a scan-config.json for Scan to consume. Returns
-// {Success: false} if the mapping file is missing or invalid.
+// Generate reads the assessment plan's RequirementIDs, resolves the policy
+// directory (preferring ComplypackContentPath from a cached complypack over
+// opa_bundle_ref + conftest pull), loads the required mapping file, matches
+// requirements to Rego namespaces, and writes a scan-config.json for Scan
+// to consume. Returns {Success: false} if the mapping file is missing or
+// invalid.
 func (s *ProviderServer) Generate(
 	_ context.Context, req *provider.GenerateRequest,
 ) (*provider.GenerateResponse, error) {
@@ -113,21 +120,13 @@ func (s *ProviderServer) Generate(
 		return nil, fmt.Errorf("directory setup failed: %w", err)
 	}
 
-	vars := mergeVariables(req.GlobalVariables, req.TargetVariables)
-	bundleRef := vars[loader.VarOPABundleRef]
-	if bundleRef == "" {
+	// Resolve policy directory: prefer complypack content path (delivered
+	// by complyctl via GenerateRequest) over opa_bundle_ref + conftest pull.
+	policyDir, err := s.resolvePolicyDir(logger, req, cfg)
+	if err != nil {
 		return &provider.GenerateResponse{
 			Success:      false,
-			ErrorMessage: "opa_bundle_ref variable is required",
-		}, nil
-	}
-
-	policyDir := cfg.PolicyDirForBundle(bundleRef)
-	logger.Info("pulling policy bundle for generate", "ref", bundleRef)
-	if err := scan.PullBundle(bundleRef, policyDir, s.opts.Runner); err != nil {
-		return &provider.GenerateResponse{
-			Success:      false,
-			ErrorMessage: fmt.Sprintf("pulling policy bundle: %s", err),
+			ErrorMessage: err.Error(),
 		}, nil
 	}
 
@@ -168,6 +167,217 @@ func (s *ProviderServer) Generate(
 		"warnings", len(warnings))
 
 	return &provider.GenerateResponse{Success: true}, nil
+}
+
+// resolvePolicyDir determines the policy directory for Generate. It checks
+// ComplypackContentPath first (delivered by complyctl from a cached complypack),
+// then falls back to opa_bundle_ref + conftest pull. Returns an error if
+// neither source is available.
+//
+// When ComplypackContentPath points to a tar.gz archive (the default
+// format produced by complyctl's complypack cache), it is extracted
+// to a sibling directory so downstream code can read files directly.
+func (s *ProviderServer) resolvePolicyDir(
+	logger hclog.Logger,
+	req *provider.GenerateRequest,
+	cfg *config.Config,
+) (string, error) {
+	if req.ComplypackContentPath != "" {
+		contentPath := req.ComplypackContentPath
+		logger.Info("using complypack content path for generate",
+			"complypack_content_path", contentPath)
+
+		resolved, err := resolveComplypackPath(contentPath)
+		if err != nil {
+			return "", fmt.Errorf(
+				"resolving complypack content path: %w", err)
+		}
+		return resolved, nil
+	}
+
+	vars := mergeVariables(req.GlobalVariables, req.TargetVariables)
+	bundleRef := vars[loader.VarOPABundleRef]
+	if bundleRef == "" {
+		return "", fmt.Errorf(
+			"either a complypack or opa_bundle_ref variable is required")
+	}
+
+	policyDir := cfg.PolicyDirForBundle(bundleRef)
+	logger.Info("pulling policy bundle for generate", "ref", bundleRef)
+	if err := scan.PullBundle(bundleRef, policyDir, s.opts.Runner); err != nil {
+		return "", fmt.Errorf("pulling policy bundle: %s", err)
+	}
+	return policyDir, nil
+}
+
+// resolveComplypackPath returns a directory containing the complypack
+// content. If contentPath is already a directory it is returned as-is.
+// If it is a tar.gz archive it is extracted to a sibling "content"
+// directory (idempotent: skips extraction when the directory exists).
+func resolveComplypackPath(contentPath string) (string, error) {
+	info, err := os.Stat(contentPath)
+	if err != nil {
+		return "", fmt.Errorf("stat %s: %w", contentPath, err)
+	}
+
+	if info.IsDir() {
+		return contentPath, nil
+	}
+
+	// Archive file — extract next to the archive.
+	extractDir := filepath.Join(filepath.Dir(contentPath), "content")
+
+	// Idempotent: if a previous run already extracted, reuse it.
+	if fi, statErr := os.Stat(extractDir); statErr == nil && fi.IsDir() {
+		return extractDir, nil
+	}
+
+	if err := extractTarGz(contentPath, extractDir); err != nil {
+		return "", fmt.Errorf("extracting complypack archive: %w", err)
+	}
+	return extractDir, nil
+}
+
+// maxExtractedFileSize is the maximum size allowed for a single file
+// extracted from a complypack archive. Complypack content consists of
+// policy files (Rego, JSON mapping) which are small; this limit guards
+// against decompression bombs.
+const maxExtractedFileSize = 100 << 20 // 100 MB
+
+// extractTarGz extracts a gzip-compressed tar archive into dst.
+// It creates dst and all necessary parent directories. Symlinks,
+// hard links, and entries with path traversal components are rejected.
+// Individual files are capped at maxExtractedFileSize bytes.
+func extractTarGz(archive, dst string) error {
+	f, err := os.Open(archive)
+	if err != nil {
+		return fmt.Errorf("opening archive: %w", err)
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("creating gzip reader: %w", err)
+	}
+	defer gz.Close()
+
+	if err := os.MkdirAll(dst, 0750); err != nil {
+		return fmt.Errorf("creating destination directory: %w", err)
+	}
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, readErr := tr.Next()
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return fmt.Errorf("reading tar entry: %w", readErr)
+		}
+
+		// Reject path traversal.
+		clean := filepath.Clean(hdr.Name)
+		if strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
+			return fmt.Errorf(
+				"tar entry %q contains path traversal", hdr.Name)
+		}
+
+		target := filepath.Join(dst, clean)
+
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if mkErr := os.MkdirAll(target, 0750); mkErr != nil {
+				return fmt.Errorf(
+					"creating directory %s: %w", target, mkErr)
+			}
+		case tar.TypeReg:
+			if mkErr := os.MkdirAll(
+				filepath.Dir(target), 0750,
+			); mkErr != nil {
+				return fmt.Errorf(
+					"creating parent directory for %s: %w",
+					target, mkErr)
+			}
+			if writeErr := writeFileFromTar(
+				target, tr,
+			); writeErr != nil {
+				return writeErr
+			}
+		case tar.TypeSymlink, tar.TypeLink:
+			return fmt.Errorf(
+				"tar entry %q: symlinks and hard links "+
+					"are not permitted", hdr.Name)
+		default:
+			// Skip metadata-only entries (e.g., pax headers).
+			continue
+		}
+	}
+	return nil
+}
+
+// writeFileFromTar writes a single file from a tar reader. Files are
+// created with mode 0600 (owner read/write only) regardless of the
+// archive header to enforce the project's permission model. The write
+// is capped at maxExtractedFileSize to guard against decompression bombs.
+func writeFileFromTar(path string, r io.Reader) error {
+	out, err := os.OpenFile(
+		path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600,
+	)
+	if err != nil {
+		return fmt.Errorf("creating file %s: %w", path, err)
+	}
+	defer out.Close()
+
+	limited := io.LimitReader(r, maxExtractedFileSize+1)
+	n, copyErr := io.Copy(out, limited)
+	if copyErr != nil {
+		return fmt.Errorf("writing file %s: %w", path, copyErr)
+	}
+	if n > maxExtractedFileSize {
+		return fmt.Errorf(
+			"file %s exceeds maximum size of %d bytes",
+			path, maxExtractedFileSize)
+	}
+	return nil
+}
+
+// resolveScanPolicyDir determines the policy directory for Scan. It uses
+// the BundleDir from the scan config (set by Generate) if available. Falls
+// back to pulling via opa_bundle_ref when no scan config exists.
+func (s *ProviderServer) resolveScanPolicyDir(
+	logger hclog.Logger,
+	target provider.Target,
+	cfg *config.Config,
+	bundleCache map[string]string,
+	scanCfg *generate.ScanConfig,
+) (string, error) {
+	// Prefer the directory from Generate's scan config (works for both
+	// complypack and opa_bundle_ref paths).
+	if scanCfg != nil && scanCfg.BundleDir != "" {
+		logger.Info("using policy dir from scan config",
+			"bundle_dir", scanCfg.BundleDir)
+		return scanCfg.BundleDir, nil
+	}
+
+	// Fall back to pulling via opa_bundle_ref.
+	bundleRef := target.Variables[loader.VarOPABundleRef]
+	if bundleRef == "" {
+		return "", fmt.Errorf(
+			"either run Generate first or set opa_bundle_ref variable")
+	}
+
+	policyDir, ok := bundleCache[bundleRef]
+	if ok {
+		return policyDir, nil
+	}
+
+	policyDir = cfg.PolicyDirForBundle(bundleRef)
+	logger.Info("pulling policy bundle", "ref", bundleRef)
+	if err := scan.PullBundle(bundleRef, policyDir, s.opts.Runner); err != nil {
+		return "", fmt.Errorf("pulling policy bundle: %s", err)
+	}
+	bundleCache[bundleRef] = policyDir
+	return policyDir, nil
 }
 
 // mergeVariables merges global and target variables. Target variables
@@ -251,16 +461,6 @@ func (s *ProviderServer) processTarget(
 	bundleCache map[string]string,
 	scanCfg *generate.ScanConfig,
 ) ([]*results.PerTargetResult, error) {
-	bundleRef := target.Variables[loader.VarOPABundleRef]
-	if bundleRef == "" {
-		logger.Warn("missing opa_bundle_ref", "target", target.TargetID)
-		return []*results.PerTargetResult{{
-			Target: target.TargetID,
-			Status: "error",
-			Error:  "opa_bundle_ref variable is required but not set",
-		}}, nil
-	}
-
 	repoURL := target.Variables[loader.VarURL]
 	inputPath := target.Variables[loader.VarInputPath]
 	branchesStr := target.Variables[loader.VarBranches]
@@ -281,19 +481,18 @@ func (s *ProviderServer) processTarget(
 		}}, nil
 	}
 
-	policyDir, ok := bundleCache[bundleRef]
-	if !ok {
-		policyDir = cfg.PolicyDirForBundle(bundleRef)
-		logger.Info("pulling policy bundle", "ref", bundleRef)
-		if err := scan.PullBundle(bundleRef, policyDir, s.opts.Runner); err != nil {
-			logger.Warn("bundle pull failed", "ref", bundleRef, "error", err)
-			return []*results.PerTargetResult{{
-				Target: target.TargetID,
-				Status: "error",
-				Error:  fmt.Sprintf("pulling policy bundle: %s", err),
-			}}, nil
-		}
-		bundleCache[bundleRef] = policyDir
+	// Resolve policy directory: use scan config's BundleDir (set by
+	// Generate from complypack or opa_bundle_ref), then fall back to
+	// pulling via opa_bundle_ref if scan config is unavailable.
+	policyDir, err := s.resolveScanPolicyDir(
+		logger, target, cfg, bundleCache, scanCfg,
+	)
+	if err != nil {
+		return []*results.PerTargetResult{{
+			Target: target.TargetID,
+			Status: "error",
+			Error:  err.Error(),
+		}}, nil
 	}
 
 	if repoURL != "" {

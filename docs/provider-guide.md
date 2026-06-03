@@ -34,6 +34,27 @@ declared variable requirements. `Generate` converts the OSCAL assessment plan
 into provider-specific policy artifacts. `Scan` invokes the underlying policy
 engine and returns assessment results.
 
+### Complypack Content Path
+
+The `GenerateRequest` includes an optional `ComplypackContentPath` field. When
+complyctl has a cached complypack for the provider's evaluator ID, it sets this
+field to the local cache path (typically a `content.tar.gz` archive under
+`~/.complytime/complypacks/<evaluator-id>/<version>/`).
+
+Providers that consume `ComplypackContentPath` should follow this resolution
+order in their `Generate` implementation:
+
+1. **ComplypackContentPath** (if non-empty) -- use the provided path directly.
+   The path may be a directory or a tar.gz archive; providers that receive an
+   archive must extract it before reading content files.
+2. **Provider-specific fallback** (e.g., `opa_bundle_ref` + pull) -- use when
+   no complypack is available.
+3. **Error** -- when neither source is available.
+
+This field is additive: existing provider-specific workflows (such as the OPA
+provider's `opa_bundle_ref` + `conftest pull`) remain unchanged when no
+complypack is provided.
+
 ## Export Interface (Optional)
 
 Providers that support evidence export implement the optional
