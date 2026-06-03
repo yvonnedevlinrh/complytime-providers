@@ -411,6 +411,20 @@ func TestResolveRequirementID_NilMapping(t *testing.T) {
 	assert.Equal(t, "kubernetes.run_as_root", result)
 }
 
+func TestParseConftestOutput_NamespaceFallback(t *testing.T) {
+	fixture := `[
+	  {"filename":"bad-workflow.yml","namespace":"ci.action_pinning","successes":0,
+	   "failures":[{"msg":"job uses unpinned action"}]},
+	  {"filename":"bad-workflow.yml","namespace":"ci.permissions","successes":1,
+	   "failures":[{"msg":"workflow uses write-all"}]}
+	]`
+	result, err := ParseConftestOutput([]byte(fixture), ".github/workflows", "")
+	require.NoError(t, err)
+	require.Len(t, result.Findings, 2)
+	assert.Equal(t, "ci.action_pinning", result.Findings[0].RequirementID)
+	assert.Equal(t, "ci.permissions", result.Findings[1].RequirementID)
+}
+
 func TestToScanResponse_WithReverseMapping(t *testing.T) {
 	results := []*PerTargetResult{
 		{

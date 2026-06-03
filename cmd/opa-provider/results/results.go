@@ -76,18 +76,18 @@ func ParseConftestOutput(raw []byte, target, branch string) (*PerTargetResult, e
 		result.SuccessCount += cr.Successes
 
 		for _, f := range cr.Failures {
-			result.Findings = append(result.Findings, buildFinding(f, cr.Filename))
+			result.Findings = append(result.Findings, buildFinding(f, cr.Filename, cr.Namespace))
 		}
 		for _, w := range cr.Warnings {
-			result.Findings = append(result.Findings, buildFinding(w, cr.Filename))
+			result.Findings = append(result.Findings, buildFinding(w, cr.Filename, cr.Namespace))
 		}
 	}
 
 	return result, nil
 }
 
-func buildFinding(cr conftestResult, filename string) Finding {
-	reqID := extractRequirementID(cr.Metadata)
+func buildFinding(cr conftestResult, filename, namespace string) Finding {
+	reqID := extractRequirementID(cr.Metadata, namespace)
 	reason := truncateField(stripControlChars(cr.Message), maxFieldSize)
 	return Finding{
 		RequirementID: reqID,
@@ -98,16 +98,20 @@ func buildFinding(cr conftestResult, filename string) Finding {
 	}
 }
 
-// extractRequirementID extracts a requirement ID from conftest result metadata.
-func extractRequirementID(metadata map[string]any) string {
-	if metadata == nil {
-		return "unknown"
+// extractRequirementID derives a requirement ID from conftest result metadata
+// or the enclosing namespace. It prefers metadata["query"] (set by conftest
+// for structured results) and falls back to the CheckResult namespace which
+// corresponds to the Rego package path (e.g. "ci.action_pinning").
+func extractRequirementID(metadata map[string]any, namespace string) string {
+	if metadata != nil {
+		if query, ok := metadata["query"].(string); ok && query != "" {
+			return deriveIDFromQuery(query)
+		}
 	}
-	query, ok := metadata["query"].(string)
-	if !ok || query == "" {
-		return "unknown"
+	if namespace != "" {
+		return namespace
 	}
-	return deriveIDFromQuery(query)
+	return "unknown"
 }
 
 // deriveIDFromQuery parses a conftest query field to extract a requirement ID.
