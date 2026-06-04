@@ -37,6 +37,9 @@ make lint
 
 # Vendor dependencies
 make vendor
+
+# Smoke-test devcontainer (Containerfile build + shellcheck)
+make test-devcontainer
 ```
 
 ### CI Workflow Structure
@@ -49,6 +52,11 @@ make vendor
 
 ```text
 complytime-providers/
+├── .devcontainer/
+│   ├── Containerfile          #   Fedora 43 dev environment
+│   ├── devcontainer.json      #   Devcontainer configuration
+│   └── scripts/
+│       └── post-create.sh     #   Setup automation script
 ├── cmd/
 │   ├── openscap-provider/     # Binary: complyctl-provider-openscap
 │   │   ├── config/            #   Configuration handling

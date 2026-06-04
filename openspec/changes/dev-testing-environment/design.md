@@ -1,85 +1,113 @@
 ## Context
 
-The complyctl repository is adding a devcontainer-based testing environment
-(complyctl `dev-testing-environment` change). This change mirrors that
-setup in complytime-providers, following the established pattern where
-complyctl owns canonical infrastructure and complytime-providers consumes
-it (same as cross-repo integration tests).
+The complyctl repository has a devcontainer-based testing environment
+(merged to main). This change mirrors that setup in complytime-providers,
+following the established pattern where complyctl owns canonical
+infrastructure and complytime-providers consumes it.
 
-The key difference from complyctl's devcontainer: here, providers are built
-from the local PR branch while complyctl is cloned from main. In complyctl's
-devcontainer, it's the reverse.
+The key difference: here, providers are built from the local PR branch
+while complyctl is cloned from main. In complyctl's devcontainer, it's
+the reverse.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Provide maintainers reviewing provider PRs with a one-command path to
-  a Fedora environment where they can test `complyctl` commands using
-  provider binaries from the PR branch.
-- Reuse complyctl's test infrastructure (mock OCI registry, Gemara test
-  fixtures, workspace configuration) by cloning it at setup time.
-- Maintain consistency with complyctl's devcontainer in terms of base
-  image, system dependencies, and tool versions.
+- One-command path to a Fedora testing environment for provider PRs.
+- Reuse complyctl's test infrastructure by cloning it at setup time.
+- Consistency with complyctl's devcontainer (same image, packages,
+  tool versions, operational patterns).
 
 **Non-Goals:**
 
-- Owning or maintaining the test content — that belongs to complyctl.
+- Owning or maintaining test content (belongs to complyctl).
 - Publishing a pre-built container image.
 - Replacing the complytime-demos Vagrant setup.
 
 ## Decisions
 
-### D1: Mirror complyctl's Containerfile
+### D1: Mirror complyctl's devcontainer configuration and patterns
 
-**Decision**: Use the same Containerfile structure as complyctl (Fedora 43
-base, same system packages via dnf).
+**Decision**: Mirror complyctl's Containerfile, devcontainer.json, and
+post-create script patterns. This includes all design decisions
+documented in complyctl's `openspec/changes/dev-testing-environment/
+design.md` (D1-D10): devcontainer.json standard, Fedora base image,
+no custom registry, cross-repo test fixtures, pinned tool versions,
+GOTOOLCHAIN=auto, SELinux runArgs, auto-rebuild hook, GITHUB_TOKEN
+least-privilege, and canonical source ownership.
 
-**Rationale**: Both devcontainers need the same system-level dependencies.
-The Containerfile is ~10 lines. Keeping them identical avoids
-environment discrepancies when testing.
+**Rationale**: Both devcontainers need identical system-level setup.
+Complyctl's implementation has been tested and improved by multiple
+maintainers. Mirroring it avoids re-learning the same lessons.
 
-### D2: Clone complyctl at post-create time for test fixtures
+### D2: Reversed build order -- providers local, complyctl from main
 
-**Decision**: The post-create script clones complyctl from main to obtain
-complyctl binary, mock-oci-registry binary, and test fixtures. This is
-the reverse of what complyctl's devcontainer does (which clones
-complytime-providers from main).
+**Decision**: The post-create script builds providers from local source
+(`make build`) and clones complyctl from main. This is the reverse of
+complyctl's devcontainer (D10), which builds complyctl locally and
+clones providers from main.
 
-**Alternatives considered**:
+**Rationale**: The PR under review is in complytime-providers, so local
+source must be providers. complyctl from main provides the CLI and mock
+registry infrastructure.
 
-- *Duplicate test fixtures into this repo*: Creates maintenance burden
-  and drift risk. The cross-repo integration test already avoids this
-  by running complyctl's script directly.
-- *Require complyctl to be merged first and reference a release*: Adds
-  fragility around release timing. Building from main is simpler and
-  always current.
+### D3: Documentation references complyctl docs for shared concepts
 
-**Rationale**: Mirrors the cross-repo integration test pattern. The test
-script, workspace config, and mock registry all live in complyctl. Cloning
-at setup time ensures freshness without duplicating content.
+**Decision**: Provider docs reference complyctl's
+`docs/TESTING_ENVIRONMENT.md` (via GitHub `main` branch blob URL) for
+Codespaces, DevPod, VS Code setup, and troubleshooting. Only
+provider-specific setup is documented here.
 
-### D3: Documentation references complyctl docs for detail
+**Rationale**: Avoids duplicating documentation that would drift.
 
-**Decision**: The providers documentation covers provider-specific setup
-and references complyctl's dev-testing-environment docs for shared
-concepts (Codespaces usage, DevPod setup, GITHUB_TOKEN configuration).
+### D4: Graceful handling of missing provider binaries
 
-**Rationale**: Avoids duplicating documentation that would drift. The
-complyctl docs are the canonical reference for the testing environment.
+**Decision**: Loop over all known providers (`openscap`, `ampel`, `opa`)
+when copying binaries. Skip missing binaries with a WARNING instead
+of failing. The `complyctl-provider-opa` binary is not yet built in
+this repository; the graceful skip path will always apply for OPA
+until the provider is added.
+
+**Rationale**: Forward-compatible with the OPA provider when it is added
+to this repo. Matches complyctl's post-create.sh pattern.
+
+### D5: Tag-based version pinning for development tools
+
+**Decision**: Install snappy (`github.com/carabiner-dev/snappy@v0.2.4`),
+ampel (`github.com/carabiner-dev/ampel/cmd/ampel@v1.2.1`), and conftest
+(`github.com/open-policy-agent/conftest@v0.68.2`) at pinned version
+tags via `go install`. This follows complyctl's approach (D6).
+
+**Rationale**: Tag-based pinning is accepted for a development
+environment where reproducibility is valued but full supply chain
+verification (commit SHA or checksum pinning) is not warranted. Go
+module tags are enforced by the module proxy checksum database
+(`sum.golang.org`), which provides integrity verification against
+tag mutation. This is a deliberate trade-off: CI uses pinned action
+SHAs for higher assurance, while the devcontainer uses version tags
+for developer ergonomics.
 
 ## Risks / Trade-offs
 
-- **[Dependency on complyctl main]** → If complyctl main is broken, the
-  providers devcontainer setup will fail. This is the same risk the
-  cross-repo integration test already accepts. The CI workflow validates
-  main continuously.
+Shared risks (container limitations, build time, GITHUB_TOKEN, podman
+rootless ownership, Fedora tag pinning) are documented in complyctl's
+`openspec/changes/dev-testing-environment/design.md` and apply equally
+here.
 
-- **[Containerfile duplication]** → Accepted. The Containerfile is minimal
-  and both repos need identical system packages. The alternative (shared
-  image registry) was explicitly rejected to avoid complexity.
+Provider-specific risks:
 
-- **[Ordering dependency]** → This change must be merged after complyctl's
-  `dev-testing-environment` change, since the post-create script depends
-  on complyctl's test fixtures and mock-oci-registry binary existing in
-  main.
+- **[Dependency on complyctl main]** -- If complyctl main is broken, the
+  providers devcontainer fails. Same risk the cross-repo integration test
+  already accepts.
+
+- **[Containerfile duplication]** -- Accepted. The Containerfile is
+  minimal and both repos need identical system packages. Each
+  Containerfile includes a comment referencing the other repo's
+  Containerfile as the sync source to signal when updates are needed.
+
+- **[Cross-repo doc link stability]** -- Provider docs reference
+  complyctl's `docs/TESTING_ENVIRONMENT.md` via GitHub `main` branch
+  URL. If complyctl renames or moves this file, the link will break.
+  Mitigation: use `main` branch URLs (auto-update as main advances)
+  and include brief inline summaries so the doc remains useful if the
+  link breaks.
