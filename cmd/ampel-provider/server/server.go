@@ -84,9 +84,12 @@ func (s *ProviderServer) Generate(_ context.Context, req *provider.GenerateReque
 
 	logger.Info("generating AMPEL policy")
 
-	sourceDir := config.GranularPolicyDirPath()
-	if customDir, ok := req.GlobalVariables["ampel_policy_dir"]; ok && customDir != "" {
-		sourceDir = customDir
+	sourceDir, resolveErr := resolvePolicyDir(logger, req)
+	if resolveErr != nil {
+		return &provider.GenerateResponse{
+			Success:      false,
+			ErrorMessage: resolveErr.Error(),
+		}, nil
 	}
 	outputDir := config.GeneratedPolicyDirPath()
 
@@ -362,6 +365,28 @@ func exportErrorMessage(failed int32) string {
 		return ""
 	}
 	return fmt.Sprintf("%d evidence records failed to export", failed)
+}
+
+// resolvePolicyDir determines the directory containing granular policy
+// files for Generate. It checks ComplypackContentPath first (delivered by
+// complyctl from a cached complypack), then the ampel_policy_dir global
+// variable, and finally falls back to the default path.
+func resolvePolicyDir(logger hclog.Logger, req *provider.GenerateRequest) (string, error) {
+	if req.ComplypackContentPath != "" {
+		logger.Info("using complypack content path for generate",
+			"complypack_content_path", req.ComplypackContentPath)
+		resolved, err := resolveComplypackPath(req.ComplypackContentPath)
+		if err != nil {
+			return "", fmt.Errorf("resolving complypack content path: %v", err)
+		}
+		return resolved, nil
+	}
+
+	if customDir, ok := req.GlobalVariables["ampel_policy_dir"]; ok && customDir != "" {
+		return customDir, nil
+	}
+
+	return config.GranularPolicyDirPath(), nil
 }
 
 // checkRequiredTools validates that all required AMPEL tools are on PATH.

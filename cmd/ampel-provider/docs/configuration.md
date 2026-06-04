@@ -145,11 +145,15 @@ Snappy inherits the parent process environment unchanged. It reads `GITHUB_TOKEN
 
 ## Granular Policy Directory
 
-The `ampel_policy_dir` global variable specifies the directory containing granular AMPEL policy source files (one JSON file per control). This is a workspace-scoped setting shared across all targets.
+The plugin resolves the granular policy source directory using the following precedence order:
+
+1. **Complypack content path** — When a complypack is configured for the ampel evaluator-id in `complytime.yaml`, complyctl provides the complypack content path automatically via `GenerateRequest.ComplypackContentPath`. The plugin extracts the content (if it is a `content.tar.gz` archive) and uses it as the policy source. This is the highest-priority source.
+2. **`ampel_policy_dir` global variable** — A custom directory specified in `complytime.yaml`. Used when no complypack is configured.
+3. **Default directory** — `.complytime/ampel/granular-policies/`. Used when neither a complypack nor `ampel_policy_dir` is set.
 
 ```yaml
 variables:
-  ampel_policy_dir: /path/to/custom/policies
+  ampel_policy_dir: /path/to/custom/policies  # optional, overridden by complypack
 ```
 
 - **Default location**: `.complytime/ampel/granular-policies/`

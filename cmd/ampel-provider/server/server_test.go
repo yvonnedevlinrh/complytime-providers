@@ -1,6 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+
 package server
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -273,6 +278,144 @@ func TestGenerate_MissingToolReturnsError(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, resp.Success)
 	require.Contains(t, resp.ErrorMessage, "nonexistent-ampel-tool-xyz")
+}
+
+// --- Generate tests: complypack content path ---
+
+// makePolicyTarGz creates a tar.gz archive containing granular policy
+// JSON files suitable for complypack content.
+func makePolicyTarGz(t *testing.T, policyIDs ...string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+
+	for _, id := range policyIDs {
+		p := convert.AmpelPolicy{
+			ID: id,
+			Meta: convert.PolicyMeta{
+				Description: "Test policy " + id,
+				Controls: []convert.PolicyControl{
+					{Framework: "repo-branch-protection", Class: "source-code", ID: "BP-1"},
+				},
+			},
+			Tenets: []convert.AmpelTenet{
+				{
+					ID:         "01",
+					Code:       "true",
+					Predicates: convert.PredicateSpec{Types: []string{"http://github.com/carabiner-dev/snappy/specs/branch-rules.yaml"}},
+					Assessment: convert.TenetMessage{Message: "OK"},
+					Error:      convert.TenetError{Message: "FAIL", Guidance: "Fix it"},
+				},
+			},
+		}
+		data, err := json.MarshalIndent(p, "", "  ")
+		require.NoError(t, err)
+
+		hdr := &tar.Header{
+			Name:     id + ".json",
+			Size:     int64(len(data)),
+			Typeflag: tar.TypeReg,
+			Mode:     0644,
+		}
+		require.NoError(t, tw.WriteHeader(hdr))
+		_, err = tw.Write(data)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, tw.Close())
+	require.NoError(t, gz.Close())
+	return buf.Bytes()
+}
+
+func TestGenerate_ComplypackContentPath_Directory(t *testing.T) {
+	s, dir := setupServer(t)
+
+	// Write policies to a complypack-style directory (not the default dir).
+	complypackDir := filepath.Join(dir, "complypack-content")
+	writeGranularPolicies(t, complypackDir, "BP-1.01")
+
+	resp, err := s.Generate(context.Background(), &provider.GenerateRequest{
+		Configuration:         makeTestConfigurations(),
+		ComplypackContentPath: complypackDir,
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Success)
+	require.Empty(t, resp.ErrorMessage)
+
+	outputPath := filepath.Join(dir, provider.WorkspaceDir, config.ProviderDir,
+		config.GeneratedPolicyDir, convert.PolicyFileName)
+	data, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "BP-1.01")
+}
+
+func TestGenerate_ComplypackContentPath_TarGz(t *testing.T) {
+	s, dir := setupServer(t)
+
+	archive := makePolicyTarGz(t, "BP-1.01")
+	archivePath := filepath.Join(dir, "content.tar.gz")
+	require.NoError(t, os.WriteFile(archivePath, archive, 0600))
+
+	resp, err := s.Generate(context.Background(), &provider.GenerateRequest{
+		Configuration:         makeTestConfigurations(),
+		ComplypackContentPath: archivePath,
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Success)
+	require.Empty(t, resp.ErrorMessage)
+
+	outputPath := filepath.Join(dir, provider.WorkspaceDir, config.ProviderDir,
+		config.GeneratedPolicyDir, convert.PolicyFileName)
+	data, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "BP-1.01")
+}
+
+func TestGenerate_ComplypackPrecedenceOverPolicyDir(t *testing.T) {
+	s, dir := setupServer(t)
+
+	// Write BP-1.01 to complypack dir, BP-3.01 to custom ampel_policy_dir.
+	complypackDir := filepath.Join(dir, "complypack-content")
+	writeGranularPolicies(t, complypackDir, "BP-1.01")
+
+	customDir := filepath.Join(dir, "custom-policies")
+	writeGranularPolicies(t, customDir, "BP-3.01")
+
+	// Both are set — complypack should win.
+	resp, err := s.Generate(context.Background(), &provider.GenerateRequest{
+		Configuration:         makeTestConfigurations(),
+		ComplypackContentPath: complypackDir,
+		GlobalVariables:       map[string]string{"ampel_policy_dir": customDir},
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Success)
+
+	outputPath := filepath.Join(dir, provider.WorkspaceDir, config.ProviderDir,
+		config.GeneratedPolicyDir, convert.PolicyFileName)
+	data, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "BP-1.01",
+		"complypack content should be used, not ampel_policy_dir")
+	require.NotContains(t, string(data), "BP-3.01",
+		"ampel_policy_dir content should NOT be used when complypack is set")
+}
+
+func TestGenerate_BackwardCompat_EmptyComplypackPath(t *testing.T) {
+	s, dir := setupServer(t)
+
+	// No ComplypackContentPath — should fall back to default dir (set by setupServer).
+	resp, err := s.Generate(context.Background(), &provider.GenerateRequest{
+		Configuration: makeTestConfigurations(),
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Success)
+
+	outputPath := filepath.Join(dir, provider.WorkspaceDir, config.ProviderDir,
+		config.GeneratedPolicyDir, convert.PolicyFileName)
+	data, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "BP-1.01")
 }
 
 // --- Scan tests (US2) ---

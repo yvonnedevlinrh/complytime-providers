@@ -33,7 +33,9 @@ ampel-plugin/
 │ └── specs/              # Embedded spec files for snappy
 ├── server/               # Package to process server functions. Here is where the plugin communicates with complyctl CLI
 │ ├── server_test.go      # Tests for functions in server.go
-│ └── server.go           # Main code used to process server functions
+│ ├── server.go           # Main code used to process server functions
+│ ├── unpack.go           # Secure tar.gz extraction for complypack content
+│ └── unpack_test.go      # Tests for functions in unpack.go
 ├── targets/              # Package to parse and validate target repository URLs
 │ ├── targets_test.go     # Tests for functions in targets.go
 │ └── targets.go          # Main code used to parse repository URLs and detect platforms
@@ -90,14 +92,21 @@ See `docs/configuration.md` for comprehensive examples including mixed-platform 
 
 ### AMPEL Policies
 
-The plugin uses granular AMPEL policy files (one JSON file per control) stored in the granular policy directory (default: `{workspace}/ampel/granular-policies/`, configurable via the `ampel_policy_dir` global variable in `complytime.yaml`). During the `generate` phase, the plugin matches assessment configuration requirement IDs to these policies and merges the matched policies into a single bundle used for verification. Generated output is written to `{workspace}/ampel/policy/`.
+The plugin resolves granular AMPEL policy files (one JSON file per control) using the following precedence:
+1. **Complypack content** — When a complypack is configured for the ampel evaluator-id, complyctl provides the content path automatically. The plugin extracts `content.tar.gz` archives if needed.
+2. **`ampel_policy_dir` global variable** — A custom directory specified in `complytime.yaml`.
+3. **Default directory** — `{workspace}/ampel/granular-policies/`.
+
+During the `generate` phase, the plugin matches assessment configuration requirement IDs to these policies and merges the matched policies into a single bundle used for verification. Generated output is written to `{workspace}/ampel/policy/`.
 
 Sample policy files are available in the [complytime-demos](https://github.com/complytime/complytime-demos) repository under `base_ansible_env/files/ampel-policies/`.
 
 ### Generate
 
 When the plugin receives the `generate` command from complyctl, it will:
-* Load granular AMPEL policy files from the configured policy directory
+* Resolve the granular policy source directory (complypack > `ampel_policy_dir` > default)
+* Extract complypack content archives if the source is a `content.tar.gz` file
+* Load granular AMPEL policy files from the resolved policy directory
 * Match assessment configuration requirement IDs to available AMPEL policies
 * Merge matched policies into a single policy bundle
 * Write the bundle to `{workspace}/ampel/policy/complytime-ampel-policy.json`
