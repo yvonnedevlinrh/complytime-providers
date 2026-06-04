@@ -430,3 +430,39 @@ func TestToScanResponse_WithReverseMapping(t *testing.T) {
 	require.Len(t, resp.Assessments, 1)
 	assert.Equal(t, "CIS-K8S-5.2.6", resp.Assessments[0].RequirementID)
 }
+
+func TestToScanResponse_MessageUsesViolationText(t *testing.T) {
+	results := []*PerTargetResult{
+		{
+			Target: "org/repo",
+			Branch: "main",
+			Status: "scanned",
+			Findings: []Finding{
+				{RequirementID: "ci.cert_validity", Result: "fail", Reason: "cert validity exceeds 397 days"},
+			},
+		},
+	}
+
+	resp := ToScanResponse(results, nil)
+	require.Len(t, resp.Assessments, 1)
+	assert.Equal(t, "cert validity exceeds 397 days", resp.Assessments[0].Message,
+		"message should contain the violation text, not a generic pass-count summary")
+}
+
+func TestToScanResponse_MessageFallsBackWhenAllPass(t *testing.T) {
+	results := []*PerTargetResult{
+		{
+			Target: "org/repo",
+			Branch: "main",
+			Status: "scanned",
+			Findings: []Finding{
+				{RequirementID: "ci.action_pinning", Result: "pass", Reason: ""},
+			},
+		},
+	}
+
+	resp := ToScanResponse(results, nil)
+	require.Len(t, resp.Assessments, 1)
+	assert.Equal(t, "1 of 1 targets passed", resp.Assessments[0].Message,
+		"passing assessments should use the pass-count summary")
+}
