@@ -242,10 +242,17 @@ func ToScanResponse(targetResults []*PerTargetResult, reverseMap map[string]stri
 	assessments := make([]provider.AssessmentLog, 0, len(groups))
 	for _, reqID := range dedupOrder {
 		g := groups[reqID]
+		msg := fmt.Sprintf("%d of %d targets passed", g.passCount, g.totalCount)
+		for _, s := range g.steps {
+			if s.Result != provider.ResultPassed {
+				msg = s.Message
+				break
+			}
+		}
 		assessments = append(assessments, provider.AssessmentLog{
 			RequirementID: g.requirementID,
 			Steps:         g.steps,
-			Message:       fmt.Sprintf("%d of %d targets passed", g.passCount, g.totalCount),
+			Message:       msg,
 			Confidence:    provider.ConfidenceLevelHigh,
 		})
 	}
