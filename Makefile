@@ -1,6 +1,6 @@
 BINARY_DIR ?= bin
 
-.PHONY: build build-openscap-provider build-ampel-provider build-opa-provider test test-cross-repo vendor lint
+.PHONY: build build-openscap-provider build-ampel-provider build-opa-provider test test-cross-repo test-devcontainer vendor lint
 
 build: build-openscap-provider build-ampel-provider build-opa-provider
 
@@ -21,6 +21,10 @@ ifndef COMPLYCTL_DIR
 	$(error COMPLYCTL_DIR is not set. Set it to the root of a built complyctl checkout)
 endif
 	timeout 120 $(COMPLYCTL_DIR)/tests/cross-repo/cross_repo_integration_test.sh
+
+test-devcontainer: ## verify devcontainer Containerfile builds and scripts pass shellcheck
+	podman build .devcontainer/
+	shellcheck .devcontainer/scripts/post-create.sh
 
 vendor:
 	go mod vendor

@@ -61,8 +61,10 @@ Each provider is self-contained under `cmd/<name>-provider/` with its own subpac
 
 ## Documentation
 
-See [docs/provider-guide.md](docs/provider-guide.md) for the provider
-development guide, including the Export interface.
+- [Provider Development Guide](docs/provider-guide.md) --
+  developing providers, including the Export interface.
+- [Dev Testing Environment](docs/dev-testing-environment.md) --
+  devcontainer setup for interactive testing during PR review.
 
 ## License
 
