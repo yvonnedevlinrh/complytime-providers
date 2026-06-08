@@ -89,6 +89,12 @@ func extractTarGz(archive, dst string) error {
 
 		target := filepath.Join(dst, clean)
 
+		// Zip-slip guard: verify the resolved path is within dst.
+		if !strings.HasPrefix(target, filepath.Clean(dst)+string(os.PathSeparator)) {
+			return fmt.Errorf(
+				"tar entry %q resolves outside destination", hdr.Name)
+		}
+
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			if mkErr := os.MkdirAll(target, 0750); mkErr != nil {
