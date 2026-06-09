@@ -375,7 +375,7 @@ func resolvePolicyDir(logger hclog.Logger, req *provider.GenerateRequest) (strin
 	if req.ComplypackContentPath != "" {
 		logger.Info("using complypack content path for generate",
 			"complypack_content_path", req.ComplypackContentPath)
-		resolved, err := resolveComplypackPath(req.ComplypackContentPath)
+			return "", fmt.Errorf("resolving complypack content path: %w", err)
 		if err != nil {
 			return "", fmt.Errorf("resolving complypack content path: %v", err)
 		}
