@@ -227,6 +227,16 @@ func ToScanResponse(targetResults []*PerTargetResult, reverseMap map[string]stri
 		}
 	}
 
+	// Synthesize passing assessments for plan IDs that had no findings.
+	// The reverseMap values are the plan IDs sent during Generate; every
+	// plan ID should appear in the response so complyctl can resolve it.
+	for _, planID := range reverseMap {
+		if _, exists := groups[planID]; !exists {
+			groups[planID] = &reqGroup{requirementID: planID}
+			order = append(order, planID)
+		}
+	}
+
 	// Sort for deterministic output
 	sort.Strings(order)
 	// Deduplicate after sorting (order may have duplicates if same reqID from multiple targets)
@@ -242,11 +252,16 @@ func ToScanResponse(targetResults []*PerTargetResult, reverseMap map[string]stri
 	assessments := make([]provider.AssessmentLog, 0, len(groups))
 	for _, reqID := range dedupOrder {
 		g := groups[reqID]
-		msg := fmt.Sprintf("%d of %d targets passed", g.passCount, g.totalCount)
-		for _, s := range g.steps {
-			if s.Result != provider.ResultPassed {
-				msg = s.Message
-				break
+		var msg string
+		if g.totalCount == 0 {
+			msg = "all checks passed"
+		} else {
+			msg = fmt.Sprintf("%d of %d targets passed", g.passCount, g.totalCount)
+			for _, s := range g.steps {
+				if s.Result != provider.ResultPassed {
+					msg = s.Message
+					break
+				}
 			}
 		}
 		assessments = append(assessments, provider.AssessmentLog{

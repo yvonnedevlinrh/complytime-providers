@@ -377,6 +377,73 @@ func TestToScanResponse_WithReverseMapping(t *testing.T) {
 	assert.Equal(t, "CIS-K8S-5.2.6", resp.Assessments[0].RequirementID)
 }
 
+func TestToScanResponse_PassingRequirementsFromReverseMap(t *testing.T) {
+	// When all checks pass for a requirement (no findings), the reverseMap
+	// should still produce a passing assessment so complyctl can resolve it.
+	results := []*PerTargetResult{
+		{
+			Target:       "target1",
+			Branch:       "main",
+			Status:       "scanned",
+			SuccessCount: 3,
+		},
+	}
+	reverseMap := map[string]string{
+		"kubernetes.run_as_root":     "CIS-K8S-5.2.6",
+		"kubernetes.resource_limits": "CIS-K8S-5.4.1",
+	}
+
+	resp := ToScanResponse(results, reverseMap)
+	require.Len(t, resp.Assessments, 2)
+
+	ids := make(map[string]bool)
+	for _, a := range resp.Assessments {
+		ids[a.RequirementID] = true
+		assert.Equal(t, "all checks passed", a.Message)
+		assert.Empty(t, a.Steps, "passing assessments with no findings should have no steps")
+	}
+	assert.True(t, ids["CIS-K8S-5.2.6"])
+	assert.True(t, ids["CIS-K8S-5.4.1"])
+	assert.Empty(t, resp.Errors)
+}
+
+func TestToScanResponse_MixedPassAndFail(t *testing.T) {
+	// One requirement has findings, another has none (all passed).
+	results := []*PerTargetResult{
+		{
+			Target: "target1",
+			Branch: "main",
+			Status: "scanned",
+			Findings: []Finding{
+				{RequirementID: "kubernetes.run_as_root", Result: "fail", Reason: "violation"},
+			},
+			SuccessCount: 2,
+		},
+	}
+	reverseMap := map[string]string{
+		"kubernetes.run_as_root":     "CIS-K8S-5.2.6",
+		"kubernetes.resource_limits": "CIS-K8S-5.4.1",
+	}
+
+	resp := ToScanResponse(results, reverseMap)
+	require.Len(t, resp.Assessments, 2)
+
+	byID := make(map[string]provider.AssessmentLog)
+	for _, a := range resp.Assessments {
+		byID[a.RequirementID] = a
+	}
+
+	// The failed requirement should have steps.
+	failedAssessment := byID["CIS-K8S-5.2.6"]
+	require.Len(t, failedAssessment.Steps, 1)
+	assert.Equal(t, provider.ResultFailed, failedAssessment.Steps[0].Result)
+
+	// The passing requirement should have no steps.
+	passedAssessment := byID["CIS-K8S-5.4.1"]
+	assert.Empty(t, passedAssessment.Steps)
+	assert.Equal(t, "all checks passed", passedAssessment.Message)
+}
+
 func TestToScanResponse_MessageUsesViolationText(t *testing.T) {
 	results := []*PerTargetResult{
 		{
