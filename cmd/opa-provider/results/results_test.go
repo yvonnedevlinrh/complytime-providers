@@ -290,74 +290,6 @@ func TestToScanResponse_Empty(t *testing.T) {
 	assert.Empty(t, resp.Errors)
 }
 
-func TestScanStatusAssessment_AllPassed(t *testing.T) {
-	results := []*PerTargetResult{
-		{Target: "org/repo", Branch: "main", Status: "scanned"},
-		{Target: "org/repo2", Branch: "main", Status: "scanned"},
-	}
-	assessment := ScanStatusAssessment(results)
-	assert.Equal(t, "scan-status", assessment.RequirementID)
-	assert.Len(t, assessment.Steps, 2)
-	for _, step := range assessment.Steps {
-		assert.Equal(t, provider.ResultPassed, step.Result)
-	}
-	assert.Contains(t, assessment.Message, "all 2 targets scanned")
-}
-
-func TestScanStatusAssessment_PartialFailure(t *testing.T) {
-	results := []*PerTargetResult{
-		{Target: "org/repo", Branch: "main", Status: "scanned"},
-		{Target: "org/repo2", Branch: "main", Status: "error", Error: "clone failed"},
-	}
-	assessment := ScanStatusAssessment(results)
-	assert.Equal(t, "scan-status", assessment.RequirementID)
-	assert.Len(t, assessment.Steps, 2)
-
-	passCount := 0
-	failCount := 0
-	for _, step := range assessment.Steps {
-		if step.Result == provider.ResultPassed {
-			passCount++
-		} else {
-			failCount++
-		}
-	}
-	assert.Equal(t, 1, passCount)
-	assert.Equal(t, 1, failCount)
-	assert.Contains(t, assessment.Message, "1 of 2 targets scanned")
-}
-
-func TestScanStatusAssessment_AllErrors(t *testing.T) {
-	results := []*PerTargetResult{
-		{Target: "org/repo", Branch: "main", Status: "error", Error: "fail1"},
-		{Target: "org/repo2", Branch: "main", Status: "error", Error: "fail2"},
-	}
-	assessment := ScanStatusAssessment(results)
-	for _, step := range assessment.Steps {
-		assert.Equal(t, provider.ResultFailed, step.Result)
-	}
-}
-
-func TestScanStatusAssessment_Empty(t *testing.T) {
-	assessment := ScanStatusAssessment(nil)
-	assert.Equal(t, "scan-status", assessment.RequirementID)
-	assert.Len(t, assessment.Steps, 0)
-	assert.Contains(t, assessment.Message, "all 0 targets scanned")
-}
-
-func TestScanStatusAssessment_OnlyTargetSteps(t *testing.T) {
-	results := []*PerTargetResult{
-		{Target: "org/repo", Branch: "main", Status: "scanned"},
-		{Target: "org/repo2", Branch: "main", Status: "scanned"},
-	}
-	assessment := ScanStatusAssessment(results)
-
-	require.Len(t, assessment.Steps, 2)
-	assert.Equal(t, "org/repo@main", assessment.Steps[0].Name)
-	assert.Equal(t, "org/repo2@main", assessment.Steps[1].Name)
-	assert.Contains(t, assessment.Message, "all 2 targets scanned successfully")
-}
-
 func TestWritePerTargetResult(t *testing.T) {
 	dir := t.TempDir()
 	result := &PerTargetResult{
@@ -443,6 +375,73 @@ func TestToScanResponse_WithReverseMapping(t *testing.T) {
 	resp := ToScanResponse(results, reverseMap)
 	require.Len(t, resp.Assessments, 1)
 	assert.Equal(t, "CIS-K8S-5.2.6", resp.Assessments[0].RequirementID)
+}
+
+func TestToScanResponse_PassingRequirementsFromReverseMap(t *testing.T) {
+	// When all checks pass for a requirement (no findings), the reverseMap
+	// should still produce a passing assessment so complyctl can resolve it.
+	results := []*PerTargetResult{
+		{
+			Target:       "target1",
+			Branch:       "main",
+			Status:       "scanned",
+			SuccessCount: 3,
+		},
+	}
+	reverseMap := map[string]string{
+		"kubernetes.run_as_root":     "CIS-K8S-5.2.6",
+		"kubernetes.resource_limits": "CIS-K8S-5.4.1",
+	}
+
+	resp := ToScanResponse(results, reverseMap)
+	require.Len(t, resp.Assessments, 2)
+
+	ids := make(map[string]bool)
+	for _, a := range resp.Assessments {
+		ids[a.RequirementID] = true
+		assert.Equal(t, "all checks passed", a.Message)
+		assert.Empty(t, a.Steps, "passing assessments with no findings should have no steps")
+	}
+	assert.True(t, ids["CIS-K8S-5.2.6"])
+	assert.True(t, ids["CIS-K8S-5.4.1"])
+	assert.Empty(t, resp.Errors)
+}
+
+func TestToScanResponse_MixedPassAndFail(t *testing.T) {
+	// One requirement has findings, another has none (all passed).
+	results := []*PerTargetResult{
+		{
+			Target: "target1",
+			Branch: "main",
+			Status: "scanned",
+			Findings: []Finding{
+				{RequirementID: "kubernetes.run_as_root", Result: "fail", Reason: "violation"},
+			},
+			SuccessCount: 2,
+		},
+	}
+	reverseMap := map[string]string{
+		"kubernetes.run_as_root":     "CIS-K8S-5.2.6",
+		"kubernetes.resource_limits": "CIS-K8S-5.4.1",
+	}
+
+	resp := ToScanResponse(results, reverseMap)
+	require.Len(t, resp.Assessments, 2)
+
+	byID := make(map[string]provider.AssessmentLog)
+	for _, a := range resp.Assessments {
+		byID[a.RequirementID] = a
+	}
+
+	// The failed requirement should have steps.
+	failedAssessment := byID["CIS-K8S-5.2.6"]
+	require.Len(t, failedAssessment.Steps, 1)
+	assert.Equal(t, provider.ResultFailed, failedAssessment.Steps[0].Result)
+
+	// The passing requirement should have no steps.
+	passedAssessment := byID["CIS-K8S-5.4.1"]
+	assert.Empty(t, passedAssessment.Steps)
+	assert.Equal(t, "all checks passed", passedAssessment.Message)
 }
 
 func TestToScanResponse_MessageUsesViolationText(t *testing.T) {

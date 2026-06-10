@@ -442,10 +442,6 @@ func (s *ProviderServer) Scan(
 		reverseMap = scanCfg.ReverseMapping
 	}
 	resp := results.ToScanResponse(allResults, reverseMap)
-	scanStatus := results.ScanStatusAssessment(allResults)
-	resp.Assessments = append(
-		[]provider.AssessmentLog{scanStatus}, resp.Assessments...,
-	)
 
 	if aggregatedErr := errors.Join(writeErrs...); aggregatedErr != nil {
 		resp.Errors = append(resp.Errors, aggregatedErr.Error())

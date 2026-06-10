@@ -906,9 +906,7 @@ func TestGenerate_Scan_WithMapping(t *testing.T) {
 	// Verify Gemara IDs (not Rego-derived IDs) in response.
 	var reqIDs []string
 	for _, a := range scanResp.Assessments {
-		if a.RequirementID != "scan-status" {
-			reqIDs = append(reqIDs, a.RequirementID)
-		}
+		reqIDs = append(reqIDs, a.RequirementID)
 	}
 	assert.Contains(t, reqIDs, "CIS-K8S-5.2.6")
 	assert.NotContains(t, reqIDs, "kubernetes.run_as_root")
@@ -988,6 +986,9 @@ func TestGenerate_Scan_MissingMappingReturnsError(t *testing.T) {
 
 func TestScan_LocalPath_HappyPath(t *testing.T) {
 	dir := t.TempDir()
+	workDir := t.TempDir()
+	writeScanConfig(t, workDir)
+
 	runner := conftestRunner(conftestHappyJSON)
 	ldr := &mockLoader{
 		loadFn: func(_ provider.Target, _ string) (string, error) {
@@ -995,7 +996,12 @@ func TestScan_LocalPath_HappyPath(t *testing.T) {
 		},
 	}
 
-	srv := newTestServer(t, runner, ldr)
+	srv := New(ServerOptions{
+		Loader:       ldr,
+		Runner:       runner,
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: workDir,
+	})
 	req := makeScanRequest(t, []provider.Target{
 		localTarget(t, dir, "ghcr.io/org/bundle:dev"),
 	})
@@ -1006,6 +1012,9 @@ func TestScan_LocalPath_HappyPath(t *testing.T) {
 }
 
 func TestScan_RemoteURL_HappyPath(t *testing.T) {
+	workDir := t.TempDir()
+	writeScanConfig(t, workDir)
+
 	runner := conftestRunner(conftestHappyJSON)
 	ldr := &mockLoader{
 		loadFn: func(_ provider.Target, _ string) (string, error) {
@@ -1013,7 +1022,12 @@ func TestScan_RemoteURL_HappyPath(t *testing.T) {
 		},
 	}
 
-	srv := newTestServer(t, runner, ldr)
+	srv := New(ServerOptions{
+		Loader:       ldr,
+		Runner:       runner,
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: workDir,
+	})
 	target := remoteTarget(
 		"ghcr.io/org/bundle:dev", "https://github.com/org/repo",
 	)
@@ -1194,11 +1208,9 @@ func TestScan_WithoutPriorGenerate_ReturnsError(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 
-	// The scan-status assessment should report failure for the target.
-	require.NotEmpty(t, resp.Assessments)
-	assert.Equal(t, "scan-status", resp.Assessments[0].RequirementID)
-	require.NotEmpty(t, resp.Assessments[0].Steps)
-	assert.Contains(t, resp.Assessments[0].Steps[0].Message,
+	// The error should be reported in resp.Errors since there is no scan config.
+	require.NotEmpty(t, resp.Errors)
+	assert.Contains(t, resp.Errors[0],
 		generate.MappingFileName,
 		"error should mention the mapping file name")
 }
@@ -1227,8 +1239,8 @@ func TestScan_MissingBundleRef(t *testing.T) {
 	resp, err := srv.Scan(context.Background(), req)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
-	require.NotEmpty(t, resp.Assessments)
-	assert.Equal(t, "scan-status", resp.Assessments[0].RequirementID)
+	require.NotEmpty(t, resp.Errors,
+		"missing bundle ref should produce an error in resp.Errors")
 }
 
 func TestScan_BothURLAndInputPath(t *testing.T) {
@@ -1320,8 +1332,8 @@ func TestScan_ConftestPullFailure(t *testing.T) {
 	resp, err := srv.Scan(context.Background(), req)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
-	require.NotEmpty(t, resp.Assessments)
-	assert.Equal(t, "scan-status", resp.Assessments[0].RequirementID)
+	require.NotEmpty(t, resp.Errors,
+		"conftest pull failure should produce an error in resp.Errors")
 }
 
 func TestScan_ConftestTestFailure(t *testing.T) {
@@ -1509,6 +1521,9 @@ func TestScan_PerTargetBundles_SameRef(t *testing.T) {
 }
 
 func TestScan_PerTargetBundles_MissingRef(t *testing.T) {
+	workDir := t.TempDir()
+	writeScanConfig(t, workDir)
+
 	runner := conftestRunner(conftestAllSuccessJSON)
 	ldr := &mockLoader{
 		loadFn: func(_ provider.Target, _ string) (string, error) {
@@ -1516,7 +1531,12 @@ func TestScan_PerTargetBundles_MissingRef(t *testing.T) {
 		},
 	}
 
-	srv := newTestServer(t, runner, ldr)
+	srv := New(ServerOptions{
+		Loader:       ldr,
+		Runner:       runner,
+		ToolChecker:  func() ([]string, error) { return nil, nil },
+		WorkspaceDir: workDir,
+	})
 	req := makeScanRequest(t, []provider.Target{
 		localTarget(t, t.TempDir(), "ghcr.io/org/bundle:dev"),
 		{
@@ -1527,7 +1547,9 @@ func TestScan_PerTargetBundles_MissingRef(t *testing.T) {
 	resp, err := srv.Scan(context.Background(), req)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
-	assert.NotEmpty(t, resp.Assessments)
+	// The missing-ref target falls back to the scan config's BundleDir,
+	// so both targets scan successfully with no findings.
+	assert.Empty(t, resp.Errors)
 }
 
 func TestScan_BundlePullFailure_PartialScan(t *testing.T) {
@@ -1605,31 +1627,6 @@ func TestScan_WriteError_PopulatesRespErrors(t *testing.T) {
 	require.NoError(t, err, "write errors should not cause gRPC-level failure")
 	require.NotNil(t, resp)
 	assert.NotEmpty(t, resp.Errors, "write errors should appear in resp.Errors")
-	assert.NotEmpty(t, resp.Assessments, "assessments should still be present")
-	assert.Equal(t, "scan-status", resp.Assessments[0].RequirementID)
-}
-
-// --- Scan status tests ---
-
-func TestScan_ScanStatusPrepended(t *testing.T) {
-	runner := conftestRunner(conftestAllSuccessJSON)
-	ldr := &mockLoader{
-		loadFn: func(_ provider.Target, _ string) (string, error) {
-			return t.TempDir(), nil
-		},
-	}
-
-	srv := newTestServer(t, runner, ldr)
-	req := makeScanRequest(t, []provider.Target{
-		localTarget(t, t.TempDir(), "ghcr.io/org/bundle:dev"),
-	})
-	resp, err := srv.Scan(context.Background(), req)
-	require.NoError(t, err)
-	require.NotEmpty(t, resp.Assessments)
-	assert.Equal(t, "scan-status", resp.Assessments[0].RequirementID)
-	assert.Contains(
-		t, resp.Assessments[0].Message, "scanned successfully",
-	)
 }
 
 // --- Validation tests ---
