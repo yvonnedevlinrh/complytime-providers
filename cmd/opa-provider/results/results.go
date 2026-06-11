@@ -230,9 +230,17 @@ func ToScanResponse(targetResults []*PerTargetResult, reverseMap map[string]stri
 	// Synthesize passing assessments for plan IDs that had no findings.
 	// The reverseMap values are the plan IDs sent during Generate; every
 	// plan ID should appear in the response so complyctl can resolve it.
+	// Each synthetic assessment includes a passing step with the target
+	// name so evaluation logs show a meaningful step identity.
+	syntheticSteps := buildSyntheticSteps(targetResults)
 	for _, planID := range reverseMap {
 		if _, exists := groups[planID]; !exists {
-			groups[planID] = &reqGroup{requirementID: planID}
+			groups[planID] = &reqGroup{
+				requirementID: planID,
+				steps:         syntheticSteps,
+				passCount:     len(syntheticSteps),
+				totalCount:    len(syntheticSteps),
+			}
 			order = append(order, planID)
 		}
 	}
@@ -273,6 +281,29 @@ func ToScanResponse(targetResults []*PerTargetResult, reverseMap map[string]stri
 	}
 
 	return &provider.ScanResponse{Assessments: assessments, Errors: opErrors}
+}
+
+// buildSyntheticSteps creates a passing step for each scanned target so that
+// synthetic assessments (plan IDs with no findings) have step identity in the
+// evaluation log. Without this, the evaluation log shows steps: [] for
+// requirements that passed all checks.
+func buildSyntheticSteps(targetResults []*PerTargetResult) []provider.Step {
+	steps := make([]provider.Step, 0, len(targetResults))
+	for _, tr := range targetResults {
+		if tr.Status == "error" {
+			continue
+		}
+		stepName := tr.Target
+		if tr.Branch != "" {
+			stepName += "@" + tr.Branch
+		}
+		steps = append(steps, provider.Step{
+			Name:    stepName,
+			Result:  provider.ResultPassed,
+			Message: "all checks passed",
+		})
+	}
+	return steps
 }
 
 func mapResult(findingResult, targetStatus string) provider.Result {
