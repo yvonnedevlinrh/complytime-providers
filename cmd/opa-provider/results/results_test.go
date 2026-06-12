@@ -380,6 +380,8 @@ func TestToScanResponse_WithReverseMapping(t *testing.T) {
 func TestToScanResponse_PassingRequirementsFromReverseMap(t *testing.T) {
 	// When all checks pass for a requirement (no findings), the reverseMap
 	// should still produce a passing assessment so complyctl can resolve it.
+	// Synthetic assessments include a passing step per scanned target for
+	// evaluation log step identity.
 	results := []*PerTargetResult{
 		{
 			Target:       "target1",
@@ -399,8 +401,9 @@ func TestToScanResponse_PassingRequirementsFromReverseMap(t *testing.T) {
 	ids := make(map[string]bool)
 	for _, a := range resp.Assessments {
 		ids[a.RequirementID] = true
-		assert.Equal(t, "all checks passed", a.Message)
-		assert.Empty(t, a.Steps, "passing assessments with no findings should have no steps")
+		require.Len(t, a.Steps, 1, "synthetic assessment should have one step per target")
+		assert.Equal(t, "target1@main", a.Steps[0].Name)
+		assert.Equal(t, provider.ResultPassed, a.Steps[0].Result)
 	}
 	assert.True(t, ids["CIS-K8S-5.2.6"])
 	assert.True(t, ids["CIS-K8S-5.4.1"])
@@ -438,10 +441,11 @@ func TestToScanResponse_MixedPassAndFail(t *testing.T) {
 	require.Len(t, failedAssessment.Steps, 1)
 	assert.Equal(t, provider.ResultFailed, failedAssessment.Steps[0].Result)
 
-	// The passing requirement should have no steps.
+	// The passing requirement should have a synthetic step with the target name.
 	passedAssessment := byID["CIS-K8S-5.4.1"]
-	assert.Empty(t, passedAssessment.Steps)
-	assert.Equal(t, "all checks passed", passedAssessment.Message)
+	require.Len(t, passedAssessment.Steps, 1)
+	assert.Equal(t, "target1@main", passedAssessment.Steps[0].Name)
+	assert.Equal(t, provider.ResultPassed, passedAssessment.Steps[0].Result)
 }
 
 func TestToScanResponse_MessageUsesViolationText(t *testing.T) {
