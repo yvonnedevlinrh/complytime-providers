@@ -235,6 +235,24 @@ func TestExtractTarGz_AbsolutePathRejected(t *testing.T) {
 	require.Contains(t, err.Error(), "path traversal")
 }
 
+func TestExtractTarGz_DotDirectoryEntry(t *testing.T) {
+	dir := t.TempDir()
+
+	archive := createTarGz(t, []tarEntry{
+		{Name: "./", Typeflag: tar.TypeDir},
+		{Name: "policy.json", Body: []byte(`{"id":"BP-1.01"}`), Typeflag: tar.TypeReg},
+	})
+	archivePath := filepath.Join(dir, "dot.tar.gz")
+	require.NoError(t, os.WriteFile(archivePath, archive, 0600))
+
+	dst := filepath.Join(dir, "out")
+	require.NoError(t, extractTarGz(archivePath, dst))
+
+	data, err := os.ReadFile(filepath.Join(dst, "policy.json"))
+	require.NoError(t, err)
+	require.Contains(t, string(data), "BP-1.01")
+}
+
 func TestExtractTarGz_FilePermissions(t *testing.T) {
 	dir := t.TempDir()
 
