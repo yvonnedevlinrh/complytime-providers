@@ -18,7 +18,7 @@ for shipping compliance evidence to an OTLP collector.
 ## Build & Test Commands
 
 Build, test, and lint commands derived from `Makefile` and
-`.github/workflows/ci.yml`:
+`.github/workflows/ci_local.yml`:
 
 ```bash
 # Build all provider binaries to bin/
@@ -46,7 +46,8 @@ make test-devcontainer
 
 | Workflow | File | Triggers | Jobs |
 |----------|------|----------|------|
-| ci | `.github/workflows/ci.yml` | push to main, tags, PRs | build-and-test, release |
+| ci | `.github/workflows/ci_local.yml` | push to main, PRs | build-and-test |
+| release | `.github/workflows/release.yml` | workflow_dispatch | preflight, release |
 
 ## Project Structure
 
@@ -86,13 +87,15 @@ complytime-providers/
 │       ├── targets/           #   Target resolution & URL parsing
 │       └── toolcheck/         #   Tool availability checking
 ├── internal/
-│   └── complytime/
-│       └── testdata/openscap/ # XML test fixtures
+│   ├── complytime/
+│   │   └── testdata/openscap/ # XML test fixtures
+│   └── version/               # Build-time version injection
 ├── docs/                      # Provider development guide
 ├── plans/                     # TMT/FMF RPM validation tests
 ├── .github/workflows/         # CI configuration
 ├── openspec/                  # OpenSpec change workflow
 ├── .opencode/                 # Agent definitions & convention packs
+├── .goreleaser.yaml           # GoReleaser v2 release config
 └── complytime-providers.spec  # RPM packaging spec
 ```
 
@@ -215,5 +218,6 @@ framework manages gRPC subprocess lifecycle via hashicorp/go-plugin.
 
 Each provider is self-contained under `cmd/<name>-provider/` with
 its own subpackage hierarchy (config, scan, server, plus
-domain-specific packages). There is no shared library code between
-providers -- `internal/complytime/` contains only test fixtures.
+domain-specific packages). The only shared code between providers is `internal/version/`,
+which provides build-time version injection via ldflags.
+`internal/complytime/` contains only test fixtures.
