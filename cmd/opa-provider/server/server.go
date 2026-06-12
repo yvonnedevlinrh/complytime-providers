@@ -282,6 +282,12 @@ func extractTarGz(archive, dst string) error {
 				"tar entry %q contains path traversal", hdr.Name)
 		}
 
+		// Skip the root directory entry produced by standard tar tools.
+		// The destination directory is already created by os.MkdirAll above.
+		if clean == "." {
+			continue
+		}
+
 		target := filepath.Join(dst, clean)
 
 		// Zip-slip guard: verify the resolved path is within dst.

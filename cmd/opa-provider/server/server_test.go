@@ -657,6 +657,42 @@ func TestExtractTarGz_SymlinkRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "symlinks and hard links")
 }
 
+func TestExtractTarGz_DotDirectoryEntry(t *testing.T) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	// Add a "." root directory entry (produced by complypack pack CLI).
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "./",
+		Typeflag: tar.TypeDir,
+		Mode:     0755,
+	}))
+	content := []byte(`{"version": "1"}`)
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "data.json",
+		Typeflag: tar.TypeReg,
+		Mode:     0644,
+		Size:     int64(len(content)),
+	}))
+	_, err := tw.Write(content)
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+	require.NoError(t, gw.Close())
+
+	archivePath := filepath.Join(t.TempDir(), "dot.tar.gz")
+	require.NoError(t, os.WriteFile(archivePath, buf.Bytes(), 0600))
+
+	dst := filepath.Join(t.TempDir(), "output")
+	require.NoError(t, extractTarGz(archivePath, dst))
+
+	assert.FileExists(t, filepath.Join(dst, "data.json"))
+
+	data, readErr := os.ReadFile(filepath.Join(dst, "data.json"))
+	require.NoError(t, readErr)
+	assert.Equal(t, `{"version": "1"}`, string(data))
+}
+
 func TestExtractTarGz_DirectoryEntries(t *testing.T) {
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
