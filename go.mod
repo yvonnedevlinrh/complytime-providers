@@ -5,7 +5,7 @@ go 1.25.8
 require (
 	github.com/antchfx/xmlquery v1.5.1
 	github.com/complytime/complybeacon/proofwatch v0.0.0-20260424082805-85cfda04ee52
-	github.com/complytime/complyctl v1.0.0-alpha.0.0.20260603142430-4e8182955d8f
+	github.com/complytime/complyctl v1.0.0-beta.0
 	github.com/gemaraproj/go-gemara v0.5.0
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/stretchr/testify v1.11.1
