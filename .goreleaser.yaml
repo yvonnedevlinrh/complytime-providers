@@ -43,8 +43,8 @@ builds:
 
 archives:
     - id: openscap
-      builds: [openscap]
-      format: tar.gz
+      ids: [openscap]
+      formats: ["tar.gz"]
       name_template: >-
           complyctl-provider-openscap_
           {{- .Os }}_
@@ -52,8 +52,8 @@ archives:
           {{- else if eq .Arch "386" }}i386
           {{- else }}{{ .Arch }}{{ end }}
     - id: ampel
-      builds: [ampel]
-      format: tar.gz
+      ids: [ampel]
+      formats: ["tar.gz"]
       name_template: >-
           complyctl-provider-ampel_
           {{- .Os }}_
@@ -61,8 +61,8 @@ archives:
           {{- else if eq .Arch "386" }}i386
           {{- else }}{{ .Arch }}{{ end }}
     - id: opa
-      builds: [opa]
-      format: tar.gz
+      ids: [opa]
+      formats: ["tar.gz"]
       name_template: >-
           complyctl-provider-opa_
           {{- .Os }}_
