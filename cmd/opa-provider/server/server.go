@@ -24,6 +24,7 @@ import (
 	"github.com/complytime/complytime-providers/cmd/opa-provider/scan"
 	"github.com/complytime/complytime-providers/cmd/opa-provider/targets"
 	"github.com/complytime/complytime-providers/cmd/opa-provider/toolcheck"
+	"github.com/complytime/complytime-providers/internal/version"
 )
 
 var safeBranchPattern = regexp.MustCompile(`^[a-zA-Z0-9._/-]+$`)
@@ -80,7 +81,7 @@ func (s *ProviderServer) Describe(
 
 	return &provider.DescribeResponse{
 		Healthy:                 healthy,
-		Version:                 "0.1.0",
+		Version:                 version.Version(),
 		ErrorMessage:            errMsg,
 		RequiredTargetVariables: []string{loader.VarURL, loader.VarInputPath},
 	}, nil

@@ -1,17 +1,21 @@
 BINARY_DIR ?= bin
+GIT_TAG_RAW := $(shell git tag --sort=-v:refname | head -1 2>/dev/null)
+GIT_TAG ?= $(or $(GIT_TAG_RAW),v0.0.0)
+VERSION ?= $(shell echo "$(GIT_TAG)" | sed 's/^v//')
+GO_LD_FLAGS := -X github.com/complytime/complytime-providers/internal/version.version=$(VERSION)
 
 .PHONY: build build-openscap-provider build-ampel-provider build-opa-provider test test-cross-repo test-devcontainer vendor lint
 
 build: build-openscap-provider build-ampel-provider build-opa-provider
 
 build-openscap-provider:
-	go build -o $(BINARY_DIR)/complyctl-provider-openscap ./cmd/openscap-provider
+	go build -ldflags="$(GO_LD_FLAGS)" -o $(BINARY_DIR)/complyctl-provider-openscap ./cmd/openscap-provider
 
 build-ampel-provider:
-	go build -o $(BINARY_DIR)/complyctl-provider-ampel ./cmd/ampel-provider
+	go build -ldflags="$(GO_LD_FLAGS)" -o $(BINARY_DIR)/complyctl-provider-ampel ./cmd/ampel-provider
 
 build-opa-provider:
-	go build -o $(BINARY_DIR)/complyctl-provider-opa ./cmd/opa-provider
+	go build -ldflags="$(GO_LD_FLAGS)" -o $(BINARY_DIR)/complyctl-provider-opa ./cmd/opa-provider
 
 test:
 	go test ./...

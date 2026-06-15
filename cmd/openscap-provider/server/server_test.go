@@ -92,7 +92,7 @@ func TestProviderServer_Describe(t *testing.T) {
 	resp, err := s.Describe(context.Background(), &provider.DescribeRequest{})
 	require.NoError(t, err)
 	assert.True(t, resp.Healthy)
-	assert.Equal(t, "0.1.0", resp.Version)
+	assert.Equal(t, "0.0.0-unknown", resp.Version)
 	assert.Contains(t, resp.RequiredTargetVariables, "profile")
 }
 

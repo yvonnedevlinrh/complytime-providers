@@ -18,6 +18,7 @@ import (
 	"github.com/complytime/complytime-providers/cmd/openscap-provider/oscap"
 	"github.com/complytime/complytime-providers/cmd/openscap-provider/scan"
 	"github.com/complytime/complytime-providers/cmd/openscap-provider/xccdf"
+	"github.com/complytime/complytime-providers/internal/version"
 )
 
 var (
@@ -34,7 +35,7 @@ func New() *ProviderServer {
 func (s *ProviderServer) Describe(_ context.Context, _ *provider.DescribeRequest) (*provider.DescribeResponse, error) {
 	return &provider.DescribeResponse{
 		Healthy:                 true,
-		Version:                 "0.1.0",
+		Version:                 version.Version(),
 		RequiredTargetVariables: []string{"profile"},
 		SupportsExport:          true,
 	}, nil

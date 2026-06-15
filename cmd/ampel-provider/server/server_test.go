@@ -158,7 +158,7 @@ func TestDescribe_Healthy(t *testing.T) {
 	resp, err := s.Describe(context.Background(), &provider.DescribeRequest{})
 	require.NoError(t, err)
 	require.True(t, resp.Healthy)
-	require.Equal(t, "0.1.0", resp.Version)
+	require.Equal(t, "0.0.0-unknown", resp.Version)
 	require.Equal(t, []string{"url", "specs"}, resp.RequiredTargetVariables)
 }
 

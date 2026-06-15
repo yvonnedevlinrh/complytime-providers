@@ -20,6 +20,7 @@ import (
 	"github.com/complytime/complytime-providers/cmd/ampel-provider/scan"
 	"github.com/complytime/complytime-providers/cmd/ampel-provider/targets"
 	"github.com/complytime/complytime-providers/cmd/ampel-provider/toolcheck"
+	"github.com/complytime/complytime-providers/internal/version"
 )
 
 // ScanRunner is used by Scan to execute scan commands.
@@ -49,7 +50,7 @@ func New() *ProviderServer {
 func (s *ProviderServer) Describe(_ context.Context, _ *provider.DescribeRequest) (*provider.DescribeResponse, error) {
 	return &provider.DescribeResponse{
 		Healthy:                 true,
-		Version:                 "0.1.0",
+		Version:                 version.Version(),
 		RequiredTargetVariables: []string{"url", "specs"},
 		SupportsExport:          true,
 	}, nil
