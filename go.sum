@@ -20,6 +20,8 @@ github.com/complytime/complybeacon/proofwatch v0.0.0-20260424082805-85cfda04ee52
 github.com/complytime/complybeacon/proofwatch v0.0.0-20260424082805-85cfda04ee52/go.mod h1:VfDPrui0Gdr0swWuI7djqamVHJBF+nK7+kquKDNKZKo=
 github.com/complytime/complyctl v1.0.0-alpha.0.0.20260603142430-4e8182955d8f h1:V+W8WhJq9GYqR/9l8CZwubMPjlqOa4syW1/iG/lyihI=
 github.com/complytime/complyctl v1.0.0-alpha.0.0.20260603142430-4e8182955d8f/go.mod h1:ktgyBtk9+EEFfa67y/HAfEaNlKSrbaZLOnI7FnRyUnc=
+github.com/complytime/complyctl v1.0.0-beta.0 h1:43IUxGrdooScQBi9mPhZ08sORi4HwoA/CbSNgTj0bKw=
+github.com/complytime/complyctl v1.0.0-beta.0/go.mod h1:ktgyBtk9+EEFfa67y/HAfEaNlKSrbaZLOnI7FnRyUnc=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=
