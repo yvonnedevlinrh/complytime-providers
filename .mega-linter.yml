@@ -1,8 +1,8 @@
 # https://megalinter.io/latest/supported-linters/
 ADDITIONAL_EXCLUDED_DIRECTORIES:
-  - node_modules
   - vendor
 ENABLE_LINTERS:
+  - ACTION_ZIZMOR
   - ACTION_ACTIONLINT
   - ANSIBLE_ANSIBLE_LINT
   - BASH_SHELLCHECK
@@ -14,8 +14,4 @@ ENABLE_LINTERS:
   - REPOSITORY_GITLEAKS
   - REPOSITORY_KICS
   - YAML_YAMLLINT
-REPOSITORY_KICS_ARGUMENTS: "--fail-on high --exclude-paths vendor,node_modules"
-# Exclude vendored proto files from protolint
-PROTOBUF_PROTOLINT_FILTER_REGEX_EXCLUDE: "vendor/"
-# Use repo-level gitleaks config for allowlists
-REPOSITORY_GITLEAKS_CONFIG_FILE: .gitleaks.toml
+REPOSITORY_KICS_ARGUMENTS: "--fail-on high"
