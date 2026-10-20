@@ -131,10 +131,9 @@ index alongside the content directories it references.
 }
 ```
 
-The `version` field enables future schema evolution without breaking
-existing workspaces. When Scan reads an index with a `version` value
-other than `1`, it SHALL log a warning and fall back to the no-index
-behavior.
+The `version` field enables future schema evolution. When Scan reads an index
+with a `version` value other than `1`, it SHALL return an error identifying
+the unsupported version and MUST NOT read the legacy shared artifact.
 
 **Target identifier derivation**: Index keys are derived from
 target identifiers using a `TargetKey` function in the shared
@@ -191,35 +190,31 @@ subdirectories.
 
 ### Decision 4: OPA scan-config stores policyDir in PolicyDir field
 
-**Choice**: Rename `ScanConfig.BundleDir` to `ScanConfig.PolicyDir`
-(JSON tag `"policy_dir"`). The field stores the resolved policy
+**Choice**: Rename `ScanConfig.BundleDir` to `ScanConfig.PolicyDir` while
+retaining the JSON tag `"bundle_dir"`. The field stores the resolved policy
 directory path regardless of source type (OCI bundle via
 `PolicyDirForBundle`, complypack extraction, or custom directory).
 This is the only mechanism for Scan to locate the Rego files —
 especially for complypacks, where the path cannot be re-derived
 from `ScanRequest`.
 
-**Why rename**: The field has always stored a general policy
-directory path, not specifically a bundle directory. Since this
-change already restructures how scan-config is written and read
-(moving it into content-keyed directories), the JSON schema is
-effectively evolving — this is the natural time to fix the
-misleading name. The rename is contained within `cmd/opa-provider/`
-(Ampel has no equivalent field). Old workspaces with `"bundle_dir"`
-in their scan-config hit the Decision 5 fallback path (no index →
-legacy behavior), so backward compatibility is preserved without
-a JSON alias.
+**Why retain the JSON tag**: The field has always stored a general policy
+directory path, not specifically a bundle directory, so the Go name should
+describe its actual meaning. The JSON file is persisted workspace state,
+however. Retaining `"bundle_dir"` avoids a schema migration and keeps existing
+workspaces readable. The rename is contained within `cmd/opa-provider/`
+(Ampel has no equivalent field).
 
 **Why the field is still needed**: `PolicyDir` bridges the
 Generate-time policy resolution to Scan-time policy location.
 Moving scan-config into a content-keyed directory does not
 eliminate the need for this field.
 
-### Decision 5: Graceful fallback for missing index
+### Decision 5: Legacy fallback only when the index is absent
 
-**Choice**: When `generate-index.json` is missing or a target's
-identifier is not found in the index, Scan falls back with a
-two-step chain:
+**Choice**: Scan uses the legacy fallback only when
+`generate-index.json` is absent. This identifies a pre-change workspace or a
+Scan-without-Generate workflow. The fallback chain is:
 - OPA: (1) try reading the legacy shared `scan-config.json` from
   the flat `GeneratedDirPath()` — this covers complypack workspaces
   where the policy came from `ComplypackContentPath` and has no
@@ -233,18 +228,25 @@ two-step chain:
   (`ScanConfigDirPath()`), logs a warning, and skips
   passing-assessment synthesis if scan-config is not found.
 
+When an index exists but cannot be parsed, has an unsupported version, lacks
+the current target, contains an invalid content key, or points to unreadable
+artifacts, Scan SHALL return an error identifying the target and index
+condition. It MUST NOT use the legacy shared artifact: that file has no target
+identity and could contain another target's configuration.
+
 **Why**: This preserves backward compatibility with workspaces
 created before this change, with Scan-without-Generate workflows,
 and critically with legacy complypack workspaces where no
-`opa_bundle_ref` exists.
+`opa_bundle_ref` exists, without silently reintroducing cross-target results
+when a new-format workspace is incomplete or corrupt.
 
 ### Decision 6: Content key validation on read
 
 **Choice**: When Scan reads a content key from `generate-index.json`,
 validate that it matches the expected hex format (`^[0-9a-f]{16}$`)
 and that the resolved absolute path is contained within the generated
-directory (no path traversal). Invalid keys trigger a fallback to the
-no-index behavior for that target.
+directory (no path traversal). Invalid keys cause a target-identifying error;
+they do not trigger legacy fallback.
 
 **Why**: A modified or corrupted `generate-index.json` could contain
 a content key with path traversal components (e.g., `../../etc`).
@@ -293,10 +295,10 @@ always points to the current directory). Accepted as harmless;
 cleanup can be added in a future change.
 
 **[Index file as single point of failure]** → If
-`generate-index.json` is corrupted or deleted, Scan falls back to
-the no-index path. For OPA this means re-pulling bundles; for Ampel
-this means degraded output. The fallback is the same behavior as
-today, so this is not a regression.
+`generate-index.json` is deleted, Scan uses the legacy fallback for backward
+compatibility. If it is present but corrupted or unsupported, Scan returns an
+error instead of reusing an unscoped legacy artifact that could belong to a
+different target.
 
 **[Hash collision]** → 16 hex characters = 64 bits of entropy. The
 birthday bound for 50% collision probability is ~2^32 distinct

@@ -116,10 +116,15 @@ directory.
 
 - **WHEN** Scan receives a target whose identifier is not present in
   `generate-index.json`
-- **THEN** OPA first tries the legacy shared scan-config.json, then falls
-  back to pulling the bundle via `opa_bundle_ref`; Ampel logs a warning
-  and skips passing-assessment synthesis; neither returns an error for the
-  entire Scan call
+- **THEN** the provider returns an error identifying the missing target entry
+  and MUST NOT read the legacy shared artifact
+
+#### Scenario: Scan with unusable index
+
+- **WHEN** `generate-index.json` cannot be parsed, has an unsupported version,
+  or points to unreadable artifacts
+- **THEN** the provider returns an error identifying the index condition and
+  MUST NOT read the legacy shared artifact
 
 #### Scenario: OPA target with input_path in Scan
 
@@ -148,9 +153,8 @@ path is contained within the generated directory.
 - **WHEN** Scan reads a content key from `generate-index.json` that does
   not match the expected hex format or that resolves to a path outside the
   generated directory (e.g., path traversal via `../`)
-- **THEN** the provider logs a warning and falls back to the no-index
-  behavior for that target, without returning an error for the entire
-  Scan call
+- **THEN** the provider returns an error identifying the invalid content key
+  and MUST NOT read the legacy shared artifact
 
 ### Requirement: Per-target result aggregation
 

@@ -53,8 +53,10 @@ data-correctness bug in a compliance tool (GitHub issue #190).
   (Generate write path, Scan read path restructured per target,
   `PolicyPath` resolved per target).
 - **Backward compatibility**: Single-target policies continue to work
-  identically. The `generated/` directory (OPA) becomes vestigial for the
-  `opa_bundle_ref` path but remains for the index file. No changes to
-  the `complyctl` plugin interface (`GenerateRequest`/`ScanRequest`).
+  identically. Workspaces without an index retain the legacy fallback, and
+  OPA retains the persisted `bundle_dir` JSON key while renaming its Go field
+  to `PolicyDir`. The `generated/` directory (OPA) becomes vestigial for the
+  `opa_bundle_ref` path but remains for the index file. No changes to the
+  `complyctl` plugin interface (`GenerateRequest`/`ScanRequest`).
 - **Test impact**: Existing single-target tests pass unchanged. New
   multi-target integration tests required for both providers.
